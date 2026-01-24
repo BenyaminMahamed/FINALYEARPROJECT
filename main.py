@@ -32,6 +32,78 @@ class AutonomousVehicle:
         self.running = False
         self.autonomous_active = False
     
+    def _open_camera(self):
+        """
+        Try multiple methods to open camera
+        Returns: (camera_object, success_boolean)
+        """
+        print("\n[CAMERA] Initializing camera...")
+        
+        # Method 1: GStreamer pipeline for Raspberry Pi Camera Module (libcamera)
+        gst_pipeline = (
+            "libcamerasrc ! "
+            "video/x-raw,width={},height={},framerate=30/1 ! "
+            "videoconvert ! "
+            "appsink".format(config.CAMERA_WIDTH, config.CAMERA_HEIGHT)
+        )
+        
+        try:
+            print("[CAMERA] Trying libcamera via GStreamer...")
+            cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+            if cap.isOpened():
+                ret, test_frame = cap.read()
+                if ret and test_frame is not None:
+                    print(f"[CAMERA] SUCCESS - Using libcamera (shape: {test_frame.shape})")
+                    return cap, True
+                cap.release()
+        except Exception as e:
+            print(f"[CAMERA] GStreamer libcamera failed: {e}")
+        
+        # Method 2: V4L2 backend (USB webcams or legacy Pi Camera)
+        try:
+            print("[CAMERA] Trying V4L2 backend...")
+            cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
+                cap.set(cv2.CAP_PROP_FPS, 30)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                
+                ret, test_frame = cap.read()
+                if ret and test_frame is not None:
+                    print(f"[CAMERA] SUCCESS - Using V4L2 (shape: {test_frame.shape})")
+                    return cap, True
+                cap.release()
+        except Exception as e:
+            print(f"[CAMERA] V4L2 failed: {e}")
+        
+        # Method 3: Standard OpenCV (fallback)
+        try:
+            print("[CAMERA] Trying standard OpenCV...")
+            cap = cv2.VideoCapture(0)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
+                cap.set(cv2.CAP_PROP_FPS, 30)
+                
+                ret, test_frame = cap.read()
+                if ret and test_frame is not None:
+                    print(f"[CAMERA] SUCCESS - Using OpenCV (shape: {test_frame.shape})")
+                    return cap, True
+                cap.release()
+        except Exception as e:
+            print(f"[CAMERA] OpenCV failed: {e}")
+        
+        # All methods failed
+        print("\n[CAMERA] FAILED - All camera methods failed")
+        print("\nTroubleshooting:")
+        print("  1. Check connection: ls /dev/video*")
+        print("  2. Test camera: libcamera-hello --timeout 5000")
+        print("  3. Load V4L2: sudo modprobe bcm2835-v4l2")
+        print("  4. Check permissions: groups (should include 'video')")
+        
+        return None, False
+    
     def run_heartbeat_test(self):
         """Hardware validation - servos and motors (FR1.2)"""
         if self.simulation_mode:
@@ -71,38 +143,32 @@ class AutonomousVehicle:
         print("  'q' - Quit test")
         print("  's' - Save current frame")
         print("  'p' - Pause/Resume")
-        print("\nOpening camera...\n")
         
-        # Try multiple camera access methods for Raspberry Pi
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            print("[WARN] Standard camera failed, trying V4L2 backend...")
-            cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
-        if not cap.isOpened():
-            print("[WARN] Trying direct device access...")
-            cap = cv2.VideoCapture('/dev/video0')
-        
-        if not cap.isOpened():
-            print("[ERROR] Cannot access camera. Troubleshooting:")
-            print("  1. Check camera connection")
-            print("  2. Run: ls /dev/video*")
-            print("  3. For Pi Camera: vcgencmd get_camera")
-            print("  4. Enable camera: sudo raspi-config")
+        # Open camera
+        cap, success = self._open_camera()
+        if not success:
             return
         
-        # Configure camera
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
-        cap.set(cv2.CAP_PROP_FPS, 30)
-        
         # Warm up camera
-        print("Warming up camera...")
-        for i in range(5):
-            ret, _ = cap.read()
-            if not ret:
-                print(f"[WARN] Warmup frame {i+1} failed")
-        time.sleep(1)
-        print("Camera ready!\n")
+        print("\n[CAMERA] Warming up...")
+        warmup_success = False
+        for i in range(10):
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                print(f"  Warmup frame {i+1}: OK - Shape: {frame.shape}")
+                warmup_success = True
+                if i >= 3:  # Need at least 3 good frames
+                    break
+            else:
+                print(f"  Warmup frame {i+1}: Failed")
+            time.sleep(0.1)
+        
+        if not warmup_success:
+            print("[ERROR] Camera warmup failed - cannot capture frames")
+            cap.release()
+            return
+        
+        print("[CAMERA] Ready! Starting detection...\n")
         
         frame_count = 0
         fps_start = time.time()
@@ -110,15 +176,16 @@ class AutonomousVehicle:
         steering_angles = []
         confidences = []
         paused = False
-        fps = 0.0  # Initialize fps to prevent UnboundLocalError
+        fps = 0.0
         
         try:
             while True:
                 if not paused:
                     ret, frame = cap.read()
-                    if not ret:
-                        print("[ERROR] Failed to grab frame")
-                        break
+                    if not ret or frame is None:
+                        print("[WARN] Failed to grab frame, retrying...")
+                        time.sleep(0.1)
+                        continue
                     
                     frame_count += 1
                     
@@ -149,7 +216,7 @@ class AutonomousVehicle:
                         avg_lat = np.mean(latencies[-30:]) if len(latencies) >= 30 else np.mean(latencies)
                         print(f"Frame {frame_count:4d} | FPS: {fps:4.1f} | "
                               f"Latency: {avg_lat:5.1f}ms | "
-                              f"Steer: {result['steering_angle']:+4d}° | "
+                              f"Steer: {result['steering_angle']:+4d}deg | "
                               f"Conf: {result['confidence']:.2f}")
                 
                 # Handle keyboard
@@ -164,6 +231,8 @@ class AutonomousVehicle:
                     paused = not paused
                     print(f"[{'PAUSED' if paused else 'RESUMED'}]")
         
+        except KeyboardInterrupt:
+            print("\n[INTERRUPT] Test stopped by user")
         except Exception as e:
             print(f"\n[ERROR] Vision test exception: {e}")
             import traceback
@@ -173,7 +242,7 @@ class AutonomousVehicle:
             cap.release()
             cv2.destroyAllWindows()
             
-            # Print comprehensive summary (only if we collected data)
+            # Print comprehensive summary
             if latencies and len(latencies) > 0:
                 self._print_vision_summary(latencies, steering_angles, confidences, fps)
             else:
@@ -189,7 +258,7 @@ class AutonomousVehicle:
         print("="*60)
         
         if not self.simulation_mode:
-            print("\n⚠ WARNING: Motors will move!")
+            print("\n WARNING: Motors will move!")
             print("Ensure vehicle is on track with clear path")
             response = input("Continue? (yes/no): ")
             if response.lower() != 'yes':
@@ -200,40 +269,32 @@ class AutonomousVehicle:
         print("  'q' - Quit")
         print("  SPACE - Start/Stop autonomous mode")
         print("  ESC - Emergency stop")
-        print()
         
-        # Try multiple camera access methods
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
-        if not cap.isOpened():
-            cap = cv2.VideoCapture('/dev/video0')
-        
-        if not cap.isOpened():
-            print("[ERROR] Cannot access camera")
+        # Open camera
+        cap, success = self._open_camera()
+        if not success:
             return
         
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
-        cap.set(cv2.CAP_PROP_FPS, 30)
-        
         # Warm up
-        for i in range(3):
+        print("\n[CAMERA] Warming up...")
+        for i in range(5):
             cap.read()
         time.sleep(0.5)
+        print("[CAMERA] Ready!\n")
         
         self.running = True
         self.autonomous_active = False
         frame_count = 0
         fps_start = time.time()
-        fps = 0.0  # Initialize fps
+        fps = 0.0
         
         try:
             while self.running:
                 ret, frame = cap.read()
-                if not ret:
-                    print("[WARN] Frame grab failed")
-                    break
+                if not ret or frame is None:
+                    print("[WARN] Frame grab failed, retrying...")
+                    time.sleep(0.1)
+                    continue
                 
                 frame_count += 1
                 
@@ -260,7 +321,7 @@ class AutonomousVehicle:
                     else:
                         # Simulation: just print commands
                         if frame_count % 15 == 0:
-                            print(f"[SIM] Speed: {speed:3d} | Steer: {steering_angle:+4d}° | Conf: {result['confidence']:.2f}")
+                            print(f"[SIM] Speed: {speed:3d} | Steer: {steering_angle:+4d}deg | Conf: {result['confidence']:.2f}")
                 
                 # Calculate FPS
                 elapsed = time.time() - fps_start
@@ -285,7 +346,7 @@ class AutonomousVehicle:
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     break
-                elif key == ord(' '):  # Spacebar - toggle autonomous
+                elif key == ord(' '):  # Spacebar
                     self.autonomous_active = not self.autonomous_active
                     status = "STARTED" if self.autonomous_active else "STOPPED"
                     print(f"\n[MODE] AUTONOMOUS {status}")
@@ -296,12 +357,14 @@ class AutonomousVehicle:
                         else:
                             self.motor_control.emergency_stop()
                             
-                elif key == 27:  # ESC - emergency stop
+                elif key == 27:  # ESC
                     print("\n[EMERGENCY STOP]")
                     self.autonomous_active = False
                     if not self.simulation_mode:
                         self.motor_control.emergency_stop()
         
+        except KeyboardInterrupt:
+            print("\n[INTERRUPT] Test stopped by user")
         except Exception as e:
             print(f"\n[ERROR] Integration test exception: {e}")
             import traceback
