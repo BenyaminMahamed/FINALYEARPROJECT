@@ -10,6 +10,65 @@ import config
 import sys
 import numpy as np
 
+# Import Picamera2 for Raspberry Pi camera
+try:
+    from picamera2 import Picamera2
+    PICAMERA2_AVAILABLE = True
+except ImportError:
+    PICAMERA2_AVAILABLE = False
+    print("[WARN] Picamera2 not available")
+
+
+class Camera:
+    """Camera wrapper using Picamera2 for Raspberry Pi"""
+    
+    def __init__(self, width=640, height=480):
+        self.width = width
+        self.height = height
+        self.camera = None
+        
+        if not PICAMERA2_AVAILABLE:
+            print("[ERROR] Picamera2 not available")
+            return
+        
+        try:
+            print(f"[CAMERA] Initializing Picamera2 ({width}x{height})...")
+            self.camera = Picamera2()
+            config_dict = self.camera.create_preview_configuration(
+                main={"size": (width, height), "format": "RGB888"}
+            )
+            self.camera.configure(config_dict)
+            self.camera.start()
+            print("[CAMERA] SUCCESS - Picamera2 ready")
+        except Exception as e:
+            print(f"[CAMERA] Failed to initialize: {e}")
+            self.camera = None
+    
+    def is_opened(self):
+        return self.camera is not None
+    
+    def read(self):
+        if self.camera is None:
+            return False, None
+        
+        try:
+            frame = self.camera.capture_array()
+            # Convert RGB to BGR for OpenCV
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            return True, frame
+        except Exception as e:
+            print(f"[CAMERA] Read error: {e}")
+            return False, None
+    
+    def release(self):
+        if self.camera:
+            try:
+                self.camera.stop()
+                self.camera.close()
+                print("[CAMERA] Released")
+            except:
+                pass
+
 
 class AutonomousVehicle:
     """Main system integrating vision and control"""
@@ -34,74 +93,24 @@ class AutonomousVehicle:
     
     def _open_camera(self):
         """
-        Try multiple methods to open camera
+        Open camera using Picamera2
         Returns: (camera_object, success_boolean)
         """
-        print("\n[CAMERA] Initializing camera...")
+        print("\n[CAMERA] Opening camera...")
         
-        # Method 1: GStreamer pipeline for Raspberry Pi Camera Module (libcamera)
-        gst_pipeline = (
-            "libcamerasrc ! "
-            "video/x-raw,width={},height={},framerate=30/1 ! "
-            "videoconvert ! "
-            "appsink".format(config.CAMERA_WIDTH, config.CAMERA_HEIGHT)
-        )
+        cap = Camera(config.CAMERA_WIDTH, config.CAMERA_HEIGHT)
         
-        try:
-            print("[CAMERA] Trying libcamera via GStreamer...")
-            cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
-            if cap.isOpened():
-                ret, test_frame = cap.read()
-                if ret and test_frame is not None:
-                    print(f"[CAMERA] SUCCESS - Using libcamera (shape: {test_frame.shape})")
-                    return cap, True
+        if cap.is_opened():
+            # Test capture
+            ret, test_frame = cap.read()
+            if ret and test_frame is not None:
+                print(f"[CAMERA] Test frame OK: {test_frame.shape}")
+                return cap, True
+            else:
+                print("[CAMERA] Failed to capture test frame")
                 cap.release()
-        except Exception as e:
-            print(f"[CAMERA] GStreamer libcamera failed: {e}")
         
-        # Method 2: V4L2 backend (USB webcams or legacy Pi Camera)
-        try:
-            print("[CAMERA] Trying V4L2 backend...")
-            cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
-            if cap.isOpened():
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
-                cap.set(cv2.CAP_PROP_FPS, 30)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                
-                ret, test_frame = cap.read()
-                if ret and test_frame is not None:
-                    print(f"[CAMERA] SUCCESS - Using V4L2 (shape: {test_frame.shape})")
-                    return cap, True
-                cap.release()
-        except Exception as e:
-            print(f"[CAMERA] V4L2 failed: {e}")
-        
-        # Method 3: Standard OpenCV (fallback)
-        try:
-            print("[CAMERA] Trying standard OpenCV...")
-            cap = cv2.VideoCapture(0)
-            if cap.isOpened():
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
-                cap.set(cv2.CAP_PROP_FPS, 30)
-                
-                ret, test_frame = cap.read()
-                if ret and test_frame is not None:
-                    print(f"[CAMERA] SUCCESS - Using OpenCV (shape: {test_frame.shape})")
-                    return cap, True
-                cap.release()
-        except Exception as e:
-            print(f"[CAMERA] OpenCV failed: {e}")
-        
-        # All methods failed
-        print("\n[CAMERA] FAILED - All camera methods failed")
-        print("\nTroubleshooting:")
-        print("  1. Check connection: ls /dev/video*")
-        print("  2. Test camera: libcamera-hello --timeout 5000")
-        print("  3. Load V4L2: sudo modprobe bcm2835-v4l2")
-        print("  4. Check permissions: groups (should include 'video')")
-        
+        print("[CAMERA] Failed to initialize")
         return None, False
     
     def run_heartbeat_test(self):
@@ -157,14 +166,14 @@ class AutonomousVehicle:
             if ret and frame is not None:
                 print(f"  Warmup frame {i+1}: OK - Shape: {frame.shape}")
                 warmup_success = True
-                if i >= 3:  # Need at least 3 good frames
+                if i >= 3:
                     break
             else:
                 print(f"  Warmup frame {i+1}: Failed")
             time.sleep(0.1)
         
         if not warmup_success:
-            print("[ERROR] Camera warmup failed - cannot capture frames")
+            print("[ERROR] Camera warmup failed")
             cap.release()
             return
         
@@ -203,8 +212,8 @@ class AutonomousVehicle:
                     elapsed = time.time() - fps_start
                     fps = frame_count / elapsed if elapsed > 0 else 0.0
                     
-                    # Display
-                    display_frame = result['debug_frame'] if result['debug_frame'] else frame
+                    # Display - FIXED: proper None check
+                    display_frame = result['debug_frame'] if result['debug_frame'] is not None else frame
                     
                     # Add metrics overlay
                     self._draw_vision_metrics(display_frame, latency_ms, fps, result)
@@ -327,8 +336,8 @@ class AutonomousVehicle:
                 elapsed = time.time() - fps_start
                 fps = frame_count / elapsed if elapsed > 0 else 0.0
                 
-                # Display
-                display_frame = result['debug_frame'] if result['debug_frame'] else frame
+                # Display - FIXED: proper None check
+                display_frame = result['debug_frame'] if result['debug_frame'] is not None else frame
                 
                 # Status overlay
                 self._draw_integration_overlay(display_frame, {
