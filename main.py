@@ -4,19 +4,13 @@
 
 from control_logic import RobotMuscle
 from lane_detection import LaneDetector
+from object_detection import ObstacleDetector
+from remote_override import RemoteOverride
 import cv2
 import time
 import config
 import sys
 import numpy as np
-
-# Import Picamera2 for Raspberry Pi camera
-try:
-    from picamera2 import Picamera2
-    PICAMERA2_AVAILABLE = True
-except ImportError:
-    PICAMERA2_AVAILABLE = False
-    print("[WARN] Picamera2 not available")
 
 
 class Camera:
@@ -27,21 +21,29 @@ class Camera:
         self.height = height
         self.camera = None
         
-        if not PICAMERA2_AVAILABLE:
-            print("[ERROR] Picamera2 not available")
-            return
-        
         try:
+            from picamera2 import Picamera2
             print(f"[CAMERA] Initializing Picamera2 ({width}x{height})...")
+            
             self.camera = Picamera2()
-            config_dict = self.camera.create_preview_configuration(
+            
+            # Configure for Pi camera
+            camera_config = self.camera.create_preview_configuration(
                 main={"size": (width, height), "format": "RGB888"}
             )
-            self.camera.configure(config_dict)
+            
+            self.camera.configure(camera_config)
             self.camera.start()
+            
+            # Wait for camera to stabilize
+            time.sleep(2)
+            
             print("[CAMERA] SUCCESS - Picamera2 ready")
+            
         except Exception as e:
             print(f"[CAMERA] Failed to initialize: {e}")
+            import traceback
+            traceback.print_exc()
             self.camera = None
     
     def is_opened(self):
@@ -71,7 +73,7 @@ class Camera:
 
 
 class AutonomousVehicle:
-    """Main system integrating vision and control"""
+    """Main system integrating vision, obstacle detection, and control"""
     
     def __init__(self, simulation_mode=False):
         """
@@ -80,6 +82,8 @@ class AutonomousVehicle:
         """
         self.simulation_mode = simulation_mode
         self.lane_detector = LaneDetector()
+        self.obstacle_detector = ObstacleDetector()
+        self.remote_override = RemoteOverride()
         
         if not simulation_mode:
             self.motor_control = RobotMuscle()
@@ -212,7 +216,7 @@ class AutonomousVehicle:
                     elapsed = time.time() - fps_start
                     fps = frame_count / elapsed if elapsed > 0 else 0.0
                     
-                    # Display - FIXED: proper None check
+                    # Display
                     display_frame = result['debug_frame'] if result['debug_frame'] is not None else frame
                     
                     # Add metrics overlay
@@ -259,11 +263,14 @@ class AutonomousVehicle:
     
     def run_integration_test(self):
         """
-        Integration test - Vision + Control
-        Tests FR1.2 (data fusion) and complete system loop
+        Full Integration Test with ALL safety features:
+        - Lane detection
+        - Obstacle detection  
+        - Remote override capability
+        - Emergency stop
         """
         print("\n" + "="*60)
-        print(f"INTEGRATION TEST - {'SIMULATION' if self.simulation_mode else 'LIVE MOTORS'}")
+        print(f"FULL INTEGRATION TEST - {'SIMULATION' if self.simulation_mode else 'LIVE MOTORS'}")
         print("="*60)
         
         if not self.simulation_mode:
@@ -275,9 +282,11 @@ class AutonomousVehicle:
                 return
         
         print("\nControls:")
-        print("  'q' - Quit")
         print("  SPACE - Start/Stop autonomous mode")
+        print("  'o' - Toggle manual override ON/OFF")
+        print("  WASD - Manual control (when override active)")
         print("  ESC - Emergency stop")
+        print("  'q' - Quit")
         
         # Open camera
         cap, success = self._open_camera()
@@ -307,70 +316,106 @@ class AutonomousVehicle:
                 
                 frame_count += 1
                 
-                # Vision processing
+                # Process frame through all systems
                 start_time = time.time()
-                result = self.lane_detector.process_frame(frame)
+                
+                # Lane detection
+                lane_result = self.lane_detector.process_frame(frame)
+                
+                # Obstacle detection
+                obstacle_result = self.obstacle_detector.detect_obstacle(frame)
+                
                 latency_ms = (time.time() - start_time) * 1000
                 
-                # Execute control commands (FR1.2 - Data Fusion)
-                if self.autonomous_active:
-                    steering_angle = result['steering_angle']
+                # DECISION LOGIC (FR2.2 - Data Fusion with Priority)
+                if self.remote_override.is_active():
+                    # MANUAL MODE - user has full control
+                    mode = "MANUAL"
+                    # Manual commands handled by keyboard below
                     
-                    # Speed based on confidence
-                    if result['confidence'] > 0.5:
+                elif obstacle_result['obstacle_detected']:
+                    # SAFETY PRIORITY - Obstacle detected!
+                    mode = "OBSTACLE STOP"
+                    if not self.simulation_mode:
+                        self.motor_control.emergency_stop()
+                    print(f"[SAFETY] Obstacle at {obstacle_result['distance_estimate']}cm - STOPPING")
+                    
+                elif self.autonomous_active:
+                    # AUTONOMOUS MODE - lane following
+                    mode = "AUTONOMOUS"
+                    steering_angle = lane_result['steering_angle']
+                    
+                    # Speed based on lane confidence
+                    if lane_result['confidence'] > 0.5:
                         speed = config.BASE_SPEED
-                    elif result['confidence'] > 0.3:
+                    elif lane_result['confidence'] > 0.3:
                         speed = config.MIN_SPEED
                     else:
-                        speed = 0  # Stop if no lane detected
+                        speed = 0  # Stop if no lane
                     
                     if not self.simulation_mode:
-                        # Send commands to motors
                         self.motor_control.execute_motion(speed, steering_angle)
                     else:
-                        # Simulation: just print commands
                         if frame_count % 15 == 0:
-                            print(f"[SIM] Speed: {speed:3d} | Steer: {steering_angle:+4d}deg | Conf: {result['confidence']:.2f}")
+                            print(f"[AUTO] Speed: {speed:3d} | Steer: {steering_angle:+4d}deg")
+                else:
+                    # STOPPED
+                    mode = "STOPPED"
+                    if not self.simulation_mode:
+                        self.motor_control.emergency_stop()
                 
                 # Calculate FPS
                 elapsed = time.time() - fps_start
                 fps = frame_count / elapsed if elapsed > 0 else 0.0
                 
-                # Display - FIXED: proper None check
-                display_frame = result['debug_frame'] if result['debug_frame'] is not None else frame
+                # Create combined visualization
+                display_frame = self._create_full_display(
+                    frame, lane_result, obstacle_result, mode, fps, latency_ms
+                )
                 
-                # Status overlay
-                self._draw_integration_overlay(display_frame, {
-                    'autonomous': self.autonomous_active,
-                    'simulation': self.simulation_mode,
-                    'fps': fps,
-                    'latency_ms': latency_ms,
-                    'steering': result['steering_angle'],
-                    'confidence': result['confidence']
-                })
-                
-                cv2.imshow('Integration Test', display_frame)
+                cv2.imshow('Full Integration Test', display_frame)
                 
                 # Handle keyboard
                 key = cv2.waitKey(1) & 0xFF
+                
                 if key == ord('q'):
                     break
-                elif key == ord(' '):  # Spacebar
-                    self.autonomous_active = not self.autonomous_active
-                    status = "STARTED" if self.autonomous_active else "STOPPED"
-                    print(f"\n[MODE] AUTONOMOUS {status}")
                     
-                    if not self.simulation_mode:
-                        if self.autonomous_active:
-                            self.motor_control.set_autonomous_mode(True)
-                        else:
-                            self.motor_control.emergency_stop()
-                            
-                elif key == 27:  # ESC
+                elif key == ord(' '):  # Toggle autonomous
+                    if not self.remote_override.is_active():
+                        self.autonomous_active = not self.autonomous_active
+                        status = "STARTED" if self.autonomous_active else "STOPPED"
+                        print(f"\n[AUTO] {status}")
+                    else:
+                        print("[WARN] Disable override first!")
+                        
+                elif key == ord('o'):  # Toggle override
+                    if self.remote_override.is_active():
+                        self.remote_override.deactivate_override()
+                        self.autonomous_active = False
+                    else:
+                        self.remote_override.activate_override()
+                        self.autonomous_active = False
+                        
+                elif key == 27:  # ESC - Emergency stop
                     print("\n[EMERGENCY STOP]")
                     self.autonomous_active = False
+                    self.remote_override.emergency_stop()
                     if not self.simulation_mode:
                         self.motor_control.emergency_stop()
+                
+                # Manual control keys (only when override active)
+                elif self.remote_override.is_active():
+                    if key == ord('w'):
+                        self.remote_override.process_manual_command('forward')
+                    elif key == ord('s'):
+                        self.remote_override.process_manual_command('backward')
+                    elif key == ord('a'):
+                        self.remote_override.process_manual_command('left')
+                    elif key == ord('d'):
+                        self.remote_override.process_manual_command('right')
+                    elif key == ord(' '):
+                        self.remote_override.process_manual_command('stop')
         
         except KeyboardInterrupt:
             print("\n[INTERRUPT] Test stopped by user")
@@ -383,9 +428,53 @@ class AutonomousVehicle:
             self.running = False
             if not self.simulation_mode and self.motor_control:
                 self.motor_control.emergency_stop()
+            self.remote_override.emergency_stop()
             cap.release()
             cv2.destroyAllWindows()
             print("\n[SHUTDOWN] Integration test complete")
+    
+    def _create_full_display(self, frame, lane_result, obstacle_result, mode, fps, latency_ms):
+        """Create combined display with all system info"""
+        # Start with lane detection overlay
+        if lane_result['debug_frame'] is not None:
+            display = lane_result['debug_frame'].copy()
+        else:
+            display = frame.copy()
+        
+        # Add obstacle detection overlay
+        if obstacle_result['debug_frame'] is not None:
+            # Blend obstacle zone from obstacle debug frame
+            pass  # Obstacle detector already draws on frame
+        
+        height, width = display.shape[:2]
+        
+        # Top overlay - System metrics
+        overlay = display.copy()
+        cv2.rectangle(overlay, (10, 10), (400, 140), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.7, display, 0.3, 0, display)
+        
+        y = 35
+        metrics = [
+            f"Mode: {mode}",
+            f"FPS: {fps:.1f} | Latency: {latency_ms:.1f}ms",
+            f"Lane Conf: {lane_result['confidence']:.2f}",
+            f"Obstacle: {'YES' if obstacle_result['obstacle_detected'] else 'NO'}"
+        ]
+        
+        for text in metrics:
+            cv2.putText(display, text, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.6, (255, 255, 255), 2)
+            y += 25
+        
+        # Bottom - Mode indicator
+        mode_color = (0, 255, 0) if mode == "AUTONOMOUS" else (0, 0, 255)
+        if mode == "OBSTACLE STOP":
+            mode_color = (0, 165, 255)  # Orange
+        
+        cv2.putText(display, mode, (10, height - 20),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.0, mode_color, 3)
+        
+        return display
     
     def _draw_vision_metrics(self, frame, latency_ms, fps, result):
         """Draw metrics overlay for vision testing"""
@@ -414,36 +503,6 @@ class AutonomousVehicle:
             cv2.putText(frame, text, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 
                        0.6, (255, 255, 255), 2)
             y += 25
-    
-    def _draw_integration_overlay(self, frame, status):
-        """Draw status overlay for integration testing"""
-        height = frame.shape[0]
-        
-        # Mode indicator
-        mode_text = "AUTONOMOUS" if status['autonomous'] else "STOPPED"
-        sim_text = " (SIM)" if status['simulation'] else " (LIVE)"
-        color = (0, 255, 0) if status['autonomous'] else (0, 0, 255)
-        
-        cv2.putText(frame, mode_text + sim_text, (10, height - 20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-        
-        # Metrics in top-left
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (10, 10), (300, 110), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-        
-        y = 35
-        metrics = [
-            f"FPS: {status['fps']:.1f}",
-            f"Latency: {status['latency_ms']:.1f}ms",
-            f"Steering: {status['steering']:+4d} deg",
-            f"Confidence: {status['confidence']:.2f}"
-        ]
-        
-        for text in metrics:
-            cv2.putText(frame, text, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.5, (255, 255, 255), 2)
-            y += 22
     
     def _print_vision_summary(self, latencies, steering_angles, confidences, fps):
         """Print comprehensive test summary"""
@@ -517,9 +576,9 @@ def print_menu():
     print("Target: Jonathan (77) - Assisted Mobility Platform")
     print("="*60)
     print("\n1. Heartbeat Test (Hardware validation)")
-    print("2. Vision Test (Lane detection - no motors)")
-    print("3. Integration Test - SIMULATION (Vision + Control logic)")
-    print("4. Integration Test - LIVE MOTORS (Full system on track)")
+    print("2. Vision Test (Lane detection only)")
+    print("3. Integration Test - SIMULATION (All systems)")
+    print("4. Integration Test - LIVE MOTORS (Full autonomous)")
     print("5. Exit")
     print()
 
@@ -549,7 +608,7 @@ def main():
             
         elif choice == '4':
             # Full system with motors
-            print("\n WARNING: This will activate motors!")
+            print("\n WARNING: Motors will move!")
             print("Requirements:")
             print("  - Vehicle must be on track")
             print("  - Clear path ahead")
@@ -585,3 +644,66 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
+```
+
+---
+
+## **How the Safety Systems Work:**
+
+### **1. Obstacle Detection (`object_detection.py`):**
+
+**What it does:**
+- Looks at the center portion of the camera frame (safety zone)
+- Detects large dark blobs that could be obstacles
+- Estimates distance based on blob size (bigger blob = closer)
+- If blob is >15% of safety zone → OBSTACLE DETECTED
+
+**How it works:**
+1. Extract safety zone from frame (center 40% width, bottom half)
+2. Convert to grayscale
+3. Threshold to find dark objects
+4. Find contours (blob shapes)
+5. If largest contour exceeds threshold → obstacle!
+
+**In integration:**
+- Runs EVERY frame alongside lane detection
+- If obstacle detected → **IMMEDIATE EMERGENCY STOP** (highest priority)
+- Overrides lane following
+
+---
+
+### **2. Remote Override (`remote_override.py`):**
+
+**What it does:**
+- Lets you manually control the car at any time
+- Press 'o' to toggle override ON/OFF
+- When active, WASD keys control the car
+- Automatically stops autonomous mode
+
+**How it works:**
+1. Press 'o' → override activates → autonomous stops
+2. Use WASD to drive manually
+3. Press 'o' again → override deactivates → can resume autonomous
+
+**In integration:**
+- Checked FIRST before any other control
+- If override active → manual commands ONLY
+- Safety: can always take control
+
+---
+
+### **3. Priority System (Data Fusion FR1.2):**
+
+**Decision hierarchy** (checked in this order):
+```
+1. MANUAL OVERRIDE active? 
+   → YES: User has full control (WASD)
+   → NO: Continue to 2
+
+2. OBSTACLE detected?
+   → YES: EMERGENCY STOP immediately
+   → NO: Continue to 3
+
+3. AUTONOMOUS mode active?
+   → YES: Follow lanes
+   → NO: Stay stopped
