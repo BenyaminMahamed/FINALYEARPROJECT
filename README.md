@@ -1,36 +1,37 @@
 # Lane Detection and Object Detection System
 
-A Python-based computer vision system that performs real-time lane detection and object detection using video input.
-This project was developed as a Final Year Project and demonstrates the use of OpenCV and machine learning techniques for road scene analysis and basic driving control logic.
+A Python-based computer vision system that performs real-time lane detection and obstacle detection using video input.
+This project was developed as a **Final Year Project** and demonstrates the use of OpenCV and classical computer vision techniques for road scene analysis and basic driving control logic.
 
 ---
 
 ## About the Project
 
-This project focuses on detecting road lanes and objects such as vehicles or obstacles from video frames.
-It combines classical computer vision techniques with object detection models to simulate decision-making logic for autonomous driving systems.
+This project focuses on detecting road lanes and obstacles from video frames using traditional computer vision methods.
+It applies image processing techniques such as edge detection, masking, and blob detection to analyze road scenes and simulate decision-making logic for autonomous driving systems.
 
-The system processes real-time video or recorded footage and provides control logic that can be overridden using keyboard inputs.
+The system processes real-time camera input or recorded video footage and includes control logic that can be manually overridden using keyboard inputs for testing and simulation purposes.
 
 ---
 
 ## Features
 
-- Real-time lane detection using OpenCV
-- Object detection for vehicles and obstacles
-- Keyboard-based control override
-- Modular and extensible code structure
-- Suitable for simulation and research purposes
+- Real-time lane detection using OpenCV  
+- Obstacle detection using classical computer vision techniques  
+- Keyboard-based manual control override  
+- Modular and well-structured codebase  
+- Suitable for simulation, experimentation, and academic research  
 
 ---
 
 ## Technologies Used
 
-- Python
-- OpenCV
-- NumPy
-- Machine Learning / Object Detection Models
-- Keyboard input handling
+- Python  
+- OpenCV for computer vision and image processing  
+- NumPy for numerical and array operations  
+- Real-time video frame processing  
+- Keyboard input handling for manual override  
+- Configuration management using Python modules  
 
 ---
 
@@ -65,25 +66,25 @@ Run the main application:
 
 python main.py  
 
-To use a video file instead of a camera feed:
+To use a video file instead of a live camera feed:
 
 python main.py --video sample_video.mp4  
 
-The system will display detected lanes and objects in real time.
+The system will display detected lane markings and obstacles in real time.
 
 ---
 
 ## Project Structure
 
 FINALYEARPROJECT/  
-├── config.py  
-├── control_logic.py  
-├── keyboard_control.py  
-├── lane_detection.py  
-├── object_detection.py  
-├── remote_override.py  
-├── main.py  
-├── models/  
+├── config.py                # Configuration settings  
+├── control_logic.py         # Steering and control logic  
+├── keyboard_control.py      # Keyboard override controls  
+├── lane_detection.py        # Lane detection algorithms  
+├── object_detection.py      # Obstacle detection logic  
+├── remote_override.py       # Manual / remote override logic  
+├── main.py                  # Application entry point  
+├── models/                  # Placeholder for future model extensions  
 ├── .gitignore  
 └── README.md  
 
@@ -91,22 +92,29 @@ FINALYEARPROJECT/
 
 ## Controls
 
-- Keyboard input allows manual override of automated controls
-- Used mainly for testing and simulation purposes
+- Keyboard input allows manual override of automated behavior  
+- Designed primarily for testing and simulation environments  
 
 ---
 
 ## Future Improvements
 
-- Improve detection accuracy using deep learning models
-- Add real-world vehicle integration
-- Implement traffic sign recognition
-- Improve performance and optimization
-- Add a graphical user interface
+- Integrate deep learning-based object detection models  
+- Improve detection robustness in complex environments  
+- Add traffic sign and signal recognition  
+- Optimize performance for higher frame rates  
+- Develop a graphical user interface (GUI)  
+
+---
+
+## License
+
+This project is licensed under the **MIT License**.
+You are free to use, modify, and distribute this project for academic and research purposes.
 
 ---
 
 ## Author
 
-Benyamin Mahamed  
+**Benyamin Mahamed**  
 Final Year Project
