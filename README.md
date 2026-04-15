@@ -1,120 +1,166 @@
-# Lane Detection and Object Detection System
+# Autonomous Navigation System for Assisted Mobility
+A classical computer vision system for real-time lane following and obstacle detection,
+built on a Raspberry Pi 5 with a SunFounder PiCar-X robot car.
 
-A Python-based computer vision system that performs real-time lane detection and obstacle detection using video input.
-This project was developed as a **Final Year Project** and demonstrates the use of OpenCV and classical computer vision techniques for road scene analysis and basic driving control logic.
+Developed as a Final Year Project at the University of Westminster, demonstrating
+autonomous navigation using OpenCV without deep learning or neural networks.
 
 ---
 
 ## About the Project
 
-This project focuses on detecting road lanes and obstacles from video frames using traditional computer vision methods.
-It applies image processing techniques such as edge detection, masking, and blob detection to analyze road scenes and simulate decision-making logic for autonomous driving systems.
+This project implements an autonomous navigation pipeline for a physical robot car
+using classical computer vision techniques. The system detects road lanes via colour
+masking and contour analysis, controls steering through a PID controller, and halts
+the vehicle when an obstacle is detected via ultrasonic sensor.
 
-The system processes real-time camera input or recorded video footage and includes control logic that can be manually overridden using keyboard inputs for testing and simulation purposes.
+The system runs entirely on-device on a Raspberry Pi 5 and operates across four modes:
+STOPPED, AUTONOMOUS, OBSTACLE STOP, and MANUAL override.
 
 ---
 
 ## Features
 
-- Real-time lane detection using OpenCV  
-- Obstacle detection using classical computer vision techniques  
-- Keyboard-based manual control override  
-- Modular and well-structured codebase  
-- Suitable for simulation, experimentation, and academic research  
+- Real-time lane detection using HSV colour masking and contour analysis
+- PID-based steering control for smooth lane following
+- Ultrasonic obstacle detection with automatic emergency stop
+- Keyboard-based manual override (press `o` to activate)
+- Modular 7-module architecture
+- Runs on Raspberry Pi 5 with no internet connection required
+- Headless operation supported for accurate FPS measurement
+
+---
+
+## Hardware Requirements
+
+- Raspberry Pi 5 (4GB or 8GB)
+- SunFounder PiCar-X robot car kit
+- Raspberry Pi Camera Module (mounted front-facing)
+- Ultrasonic distance sensor (included with PiCar-X)
+- MicroSD card (32GB+ recommended)
+- Power supply or battery pack compatible with PiCar-X
 
 ---
 
 ## Technologies Used
 
-- Python  
-- OpenCV for computer vision and image processing  
-- NumPy for numerical and array operations  
-- Real-time video frame processing  
-- Keyboard input handling for manual override  
-- Configuration management using Python modules  
+- Python 3
+- OpenCV — lane detection and image processing
+- NumPy — numerical operations
+- RPi.GPIO / SunFounder PiCar-X SDK — motor and servo control
+- pigpio — GPIO management on Raspberry Pi
+- Keyboard input handling for manual override
 
 ---
 
 ## Installation
 
-1. Clone the repository
+### On the Raspberry Pi
 
-git clone https://github.com/BenyaminMahamed/FINALYEARPROJECT.git  
-cd FINALYEARPROJECT  
+1. Clone the repositorygit clone https://github.com/BenyaminMahamed/FINALYEARPROJECT.git
+cd FINALYEARPROJECT
 
-2. Create a virtual environment (recommended)
+2. Install system dependenciessudo apt update
+sudo apt install python3-opencv python3-numpy pigpio
+sudo systemctl enable pigpiod
+sudo systemctl start pigpiod
 
-python -m venv venv  
+3. Install Python dependenciespip install -r requirements.txt
 
-3. Activate the virtual environment
-
-Windows:  
-venv\Scripts\activate  
-
-macOS / Linux:  
-source venv/bin/activate  
-
-4. Install dependencies
-
-pip install opencv-python numpy  
+4. Ensure the PiCar-X SDK is installed and calibrated per the
+SunFounder documentation before running.
 
 ---
 
 ## Usage
 
-Run the main application:
+### Run the main systempython main.py
 
-python main.py  
+### Run in headless mode (recommended for accurate FPS)python main.py --headless
 
-To use a video file instead of a live camera feed:
+### Run a specific test modepython main.py --mode 4
 
-python main.py --video sample_video.mp4  
-
-The system will display detected lane markings and obstacles in real time.
+Mode reference:
+- Mode 1 — Vision/lane detection test
+- Mode 2 — Integration test (STOPPED/AUTONOMOUS)
+- Mode 3 — Obstacle detection test
+- Mode 4 — Live autonomous driving on track
 
 ---
 
-## Project Structure
+## Project StructureFINALYEARPROJECT/
+├── config.py              # Configuration and tuning parameters
 
-FINALYEARPROJECT/  
-├── config.py                # Configuration settings  
-├── control_logic.py         # Steering and control logic  
-├── keyboard_control.py      # Keyboard override controls  
-├── lane_detection.py        # Lane detection algorithms  
-├── object_detection.py      # Obstacle detection logic  
-├── remote_override.py       # Manual / remote override logic  
-├── main.py                  # Application entry point  
-├── models/                  # Placeholder for future model extensions  
-├── .gitignore  
-└── README.md  
+├── control_logic.py       # PID steering and drive control
+
+├── keyboard_control.py    # Keyboard manual override handler
+
+├── lane_detection.py      # HSV masking, contour analysis, lane centroid
+
+├── object_detection.py    # Ultrasonic obstacle detection logic
+
+├── remote_override.py     # Manual/remote override logic
+
+├── main.py                # Application entry point and mode selector
+
+├── test_logs/             # CSV and JSON output from test runs
+
+├── models/                # Placeholder for future model extensions
+
+├── .gitignore
+
+└── README.md
 
 ---
 
 ## Controls
 
-- Keyboard input allows manual override of automated behavior  
-- Designed primarily for testing and simulation environments  
+| Key | Action |
+|-----|--------|
+| `o` | Toggle manual override |
+| Arrow keys | Manual steering and drive |
+| `q` | Quit |
+
+---
+
+## System Modes
+
+| Mode | Label | Description |
+|------|-------|-------------|
+| STOPPED | System idle, motors off |
+| AUTONOMOUS | Lane following active |
+| OBSTACLE STOP | Obstacle detected, halted |
+| MANUAL | Keyboard override active |
+
+---
+
+## Demo
+
+A full video demonstration of the system running autonomously on a physical track,
+including obstacle detection and manual override, is available at:
+
+**[Demo Video — link to be added post-testing]**
 
 ---
 
 ## Future Improvements
 
-- Integrate deep learning-based object detection models  
-- Improve detection robustness in complex environments  
-- Add traffic sign and signal recognition  
-- Optimize performance for higher frame rates  
-- Develop a graphical user interface (GUI)  
+- Deep learning-based lane and object detection
+- Improved robustness in variable lighting conditions
+- Traffic sign recognition
+- Higher FPS optimisation
+- GUI dashboard for live telemetry
 
 ---
 
 ## License
 
-This project is licensed under the **MIT License**.
-You are free to use, modify, and distribute this project for academic and research purposes.
+MIT License. Free to use, modify, and distribute for academic and research purposes.
 
 ---
 
 ## Author
 
-**Benyamin Mahamed**  
-Final Year Project
+**Benyamin Mahamed**
+BSc Computer Science, University of Westminster
+Final Year Project — 2025/26
