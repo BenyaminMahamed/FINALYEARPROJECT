@@ -118,7 +118,12 @@ Mode reference:
 | Key | Action |
 |-----|--------|
 | `o` | Toggle manual override |
-| Arrow keys | Manual steering and drive |
+| `w` | Forward |
+| `a` | Left |
+| `s` | Backward |
+| `d` | Right |
+| `+` | Increase Speed |
+| `-` | Decrease Speed |
 | `q` | Quit |
 
 ---
