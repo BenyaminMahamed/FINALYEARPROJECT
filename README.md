@@ -130,8 +130,8 @@ Mode reference:
 
 ## System Modes
 
-| Mode | Label | Description |
-|------|-------|-------------|
+| Mode | Description |
+|------|-------------|
 | STOPPED | System idle, motors off |
 | AUTONOMOUS | Lane following active |
 | OBSTACLE STOP | Obstacle detected, halted |
