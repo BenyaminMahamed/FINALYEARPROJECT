@@ -158,12 +158,6 @@ including obstacle detection and manual override, is available at:
 
 ---
 
-## License
-
-MIT License. Free to use, modify, and distribute for academic and research purposes.
-
----
-
 ## Author
 
 **Benyamin Mahamed**
