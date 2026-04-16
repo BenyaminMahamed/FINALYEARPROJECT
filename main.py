@@ -571,16 +571,10 @@ class AutonomousVehicle:
             if self.logger:
                 self.logger.save_summary()
     
-    def run_integration_test(self):
+def run_integration_test(self):
         """
         Full Integration Test with ALL safety features.
-        
-        Tests complete system integration:
-            - Lane detection (FR1.1)
-            - Obstacle detection (FR2.1, FR2.2)
-            - Remote override (FR3.1, FR3.2, FR3.3)
-            - Emergency stop (NFR-S1, NFR-S2)
-            - Data fusion (FR1.2)
+        Fixed directional logic: Aligned CV coordinates with physical actuators.
         """
         if self.logger:
             self.logger.set_test_mode("integration_test" + 
@@ -637,63 +631,59 @@ class AutonomousVehicle:
                     continue
                 
                 frame_count += 1
-                
-                # Process frame through all systems
                 start_time = time.time()
                 
-                # Lane detection (FR1.1)
+                # Subsystem Processing
                 lane_result = self.lane_detector.process_frame(frame)
-                
-                # Obstacle detection (FR2.1)
                 obstacle_result = self.obstacle_detector.detect_obstacle(frame)
-                
                 latency_ms = (time.time() - start_time) * 1000
                 
-                # DECISION LOGIC (FR1.2 - Data Fusion with Safety Priority)
+                # DECISION LOGIC (Data Fusion with Safety Priority)
                 if self.remote_override.is_active():
-                    # PRIORITY 1: MANUAL MODE - user has full control
                     mode = "MANUAL"
-                    speed = 0  # Manual commands handled by keyboard below
+                    speed = 0  
                     
                 elif obstacle_result['obstacle_detected']:
-                    # PRIORITY 2: SAFETY - Obstacle detected!
                     mode = "OBSTACLE STOP"
                     speed = 0
                     if not self.simulation_mode:
                         self.motor_control.emergency_stop()
-                    if frame_count % 30 == 0:  # Throttle console output
+                    if frame_count % 30 == 0:
                         print(f"[SAFETY] Obstacle at {obstacle_result['distance_estimate']}cm - STOPPING")
                     
                 elif self.autonomous_active:
-                    # PRIORITY 3: AUTONOMOUS MODE - lane following
                     mode = "AUTONOMOUS"
-                    steering_angle = lane_result['steering_angle']
                     
-                    # Speed based on lane confidence
+                    # --- CALIBRATION FIX: STEERING INVERSION ---
+                    # Inverting CV result to align with physical servo mapping
+                    steering_angle = lane_result['steering_angle'] * -1
+                    
                     if lane_result['confidence'] > 0.5:
                         speed = config.BASE_SPEED
                     elif lane_result['confidence'] > 0.3:
                         speed = config.MIN_SPEED
                     else:
-                        speed = 0  # Stop if no lane detected
+                        speed = 0 
                     
                     if not self.simulation_mode:
-                        self.motor_control.execute_motion(speed, steering_angle)
+                        # --- CALIBRATION FIX: MOTOR POLARITY ---
+                        # Use px.forward(speed) to move physically forward 
+                        # Use px.set_dir_servo_angle for direction
+                        self.motor_control.px.forward(speed)
+                        self.motor_control.px.set_dir_servo_angle(steering_angle)
                     else:
                         if frame_count % 15 == 0:
                             print(f"[AUTO] Speed: {speed:3d} | Steer: {steering_angle:+4d}deg | Conf: {lane_result['confidence']:.2f}")
                 else:
-                    # PRIORITY 4: STOPPED
                     mode = "STOPPED"
                     speed = 0
                     if not self.simulation_mode:
                         self.motor_control.emergency_stop()
                 
-                # Calculate FPS
+                # Performance Tracking
                 elapsed = time.time() - fps_start
                 fps = frame_count / elapsed if elapsed > 0 else 0.0
                 
-                # Log metrics
                 if self.logger:
                     self.logger.log_frame(frame_count, {
                         'fps': fps,
@@ -707,97 +697,62 @@ class AutonomousVehicle:
                         'speed': speed
                     })
                 
-                # Create combined visualization
-                display_frame = self._create_full_display(
-                    frame, lane_result, obstacle_result, mode, fps, latency_ms
-                )
+                # Visualization (Safe Display Wrapper)
+                display_frame = self._create_full_display(frame, lane_result, obstacle_result, mode, fps, latency_ms)
                 
-                cv2.imshow('Full Integration Test', display_frame)
+                if os.environ.get('DISPLAY'):
+                    try:
+                        cv2.imshow('Full Integration Test', display_frame)
+                    except:
+                        pass
                 
-                # Handle keyboard input
                 key = cv2.waitKey(1) & 0xFF
-                
                 if key == ord('q'):
                     break
-                    
                 elif key == ord(' '):  # Toggle autonomous
                     if not self.remote_override.is_active():
                         self.autonomous_active = not self.autonomous_active
                         status = "STARTED" if self.autonomous_active else "STOPPED"
                         print(f"\n[AUTO] {status}")
-                        if self.logger:
-                            self.logger.log_event('mode_change', f'Autonomous {status}')
                     else:
                         print("[WARN] Disable override first!")
-                        
                 elif key == ord('o'):  # Toggle override
                     if self.remote_override.is_active():
                         self.remote_override.deactivate_override()
-                        self.autonomous_active = False
                     else:
                         self.remote_override.activate_override()
                         self.autonomous_active = False
-                        
                 elif key == 27:  # ESC - Emergency stop
-                    print("\n[EMERGENCY STOP] User initiated")
                     self.autonomous_active = False
                     self.remote_override.emergency_stop()
                     if not self.simulation_mode:
                         self.motor_control.emergency_stop()
-                    if self.logger:
-                        self.logger.log_event('emergency_stop', 'User triggered (ESC key)')
                 
-                # Manual control keys (only when override active)
+                # Manual control keys
                 elif self.remote_override.is_active():
-                    if key == ord('w'):
-                        self.remote_override.process_manual_command('forward')
-                    elif key == ord('s'):
-                        self.remote_override.process_manual_command('backward')
-                    elif key == ord('a'):
-                        self.remote_override.process_manual_command('left')
-                    elif key == ord('d'):
-                        self.remote_override.process_manual_command('right')
-                    elif key == ord(' '):
-                        self.remote_override.process_manual_command('stop')
+                    if key == ord('w'): self.remote_override.process_manual_command('forward')
+                    elif key == ord('s'): self.remote_override.process_manual_command('backward')
+                    elif key == ord('a'): self.remote_override.process_manual_command('left')
+                    elif key == ord('d'): self.remote_override.process_manual_command('right')
+                    elif key == ord(' '): self.remote_override.process_manual_command('stop')
         
-        except KeyboardInterrupt:
-            print("\n[INTERRUPT] Test stopped by user")
         except Exception as e:
             print(f"\n[ERROR] Integration test exception: {e}")
-            if self.logger:
-                self.logger.log_event('error', f"Integration test exception: {e}")
             import traceback
             traceback.print_exc()
-        
         finally:
             self.running = False
-            
-            # Safe shutdown
             if not self.simulation_mode and self.motor_control:
                 self.motor_control.emergency_stop()
             self.remote_override.emergency_stop()
-            
             cap.release()
             cv2.destroyAllWindows()
             
-            print("\n[SHUTDOWN] Integration test complete")
-            
-            # Print all subsystem statistics
-            print("\n" + "="*60)
-            print("SESSION STATISTICS")
-            print("="*60)
-            
+            print("\nSESSION STATISTICS")
             self.lane_detector.print_statistics()
             self.obstacle_detector.print_statistics()
             self.remote_override.print_statistics()
-            
-            if not self.simulation_mode:
-                self.motor_control.print_statistics()
-            
-            # Save logger summary
-            if self.logger:
-                self.logger.save_summary()
-    
+            if self.logger: self.logger.save_summary()
     def _create_full_display(self, frame: np.ndarray,
                             lane_result: Dict, obstacle_result: Dict,
                             mode: str, fps: float, latency_ms: float) -> np.ndarray:
