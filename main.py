@@ -571,6 +571,7 @@ class AutonomousVehicle:
             if self.logger:
                 self.logger.save_summary()
     
+
 def run_integration_test(self):
         """
         Full Integration Test with ALL safety features.
@@ -655,7 +656,6 @@ def run_integration_test(self):
                     mode = "AUTONOMOUS"
                     
                     # --- CALIBRATION FIX: STEERING INVERSION ---
-                    # Inverting CV result to align with physical servo mapping
                     steering_angle = lane_result['steering_angle'] * -1
                     
                     if lane_result['confidence'] > 0.5:
@@ -667,8 +667,6 @@ def run_integration_test(self):
                     
                     if not self.simulation_mode:
                         # --- CALIBRATION FIX: MOTOR POLARITY ---
-                        # Use px.forward(speed) to move physically forward 
-                        # Use px.set_dir_servo_angle for direction
                         self.motor_control.px.forward(speed)
                         self.motor_control.px.set_dir_servo_angle(steering_angle)
                     else:
@@ -753,39 +751,23 @@ def run_integration_test(self):
             self.obstacle_detector.print_statistics()
             self.remote_override.print_statistics()
             if self.logger: self.logger.save_summary()
-                
+
     def _create_full_display(self, frame: np.ndarray,
                             lane_result: Dict, obstacle_result: Dict,
                             mode: str, fps: float, latency_ms: float) -> np.ndarray:
         """
         Create combined display with all system information.
-        
-        Args:
-            frame: Original camera frame
-            lane_result: Lane detection results
-            obstacle_result: Obstacle detection results
-            mode: Current system mode
-            fps: Current frame rate
-            latency_ms: Processing latency
-            
-        Returns:
-            Annotated display frame
         """
-        # Start with lane detection overlay
         if lane_result['debug_frame'] is not None:
             display = lane_result['debug_frame'].copy()
         else:
             display = frame.copy()
         
-        # Overlay obstacle detection visualization
         if obstacle_result['debug_frame'] is not None:
-            # Blend obstacle zone visualization
             mask = np.all(obstacle_result['debug_frame'] == frame, axis=2)
             display[~mask] = obstacle_result['debug_frame'][~mask]
         
         height, width = display.shape[:2]
-        
-        # Top overlay - System metrics
         overlay = display.copy()
         cv2.rectangle(overlay, (10, 10), (450, 140), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.7, display, 0.3, 0, display)
@@ -799,22 +781,13 @@ def run_integration_test(self):
         ]
         
         for text in metrics:
-            cv2.putText(display, text, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.6, (255, 255, 255), 2)
+            cv2.putText(display, text, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             y += 25
         
-        # Bottom - Mode indicator
         mode_color = (0, 255, 0) if mode == "AUTONOMOUS" else (0, 0, 255)
-        if mode == "OBSTACLE STOP":
-            mode_color = (0, 165, 255)  # Orange
-        elif mode == "MANUAL":
-            mode_color = (255, 0, 255)  # Magenta
-        
-        cv2.putText(display, mode, (10, height - 20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 1.0, mode_color, 3)
-        
+        cv2.putText(display, mode, (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 1.0, mode_color, 3)
         return display
-    
+
     def _draw_vision_metrics(self, frame: np.ndarray, latency_ms: float,
                             fps: float, result: Dict):
         """Draw metrics overlay for vision testing"""
@@ -823,15 +796,10 @@ def run_integration_test(self):
         cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
         
         y = 35
-        
-        # Latency with pass/fail indicator
         latency_color = (0, 255, 0) if latency_ms < config.LATENCY_TARGET_MS else (0, 0, 255)
-        latency_status = "✓ PASS" if latency_ms < config.LATENCY_TARGET_MS else "✗ FAIL"
-        cv2.putText(frame, f"Latency: {latency_ms:.1f}ms {latency_status}", 
-                   (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, latency_color, 2)
+        cv2.putText(frame, f"Latency: {latency_ms:.1f}ms", (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, latency_color, 2)
         y += 25
         
-        # Other metrics
         metrics = [
             f"FPS: {fps:.1f}",
             f"Steering: {result['steering_angle']:+4d} deg",
@@ -840,8 +808,7 @@ def run_integration_test(self):
         ]
         
         for text in metrics:
-            cv2.putText(frame, text, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.6, (255, 255, 255), 2)
+            cv2.putText(frame, text, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             y += 25
     
     def _print_vision_summary(self, latencies: list, steering_angles: list,
