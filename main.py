@@ -983,10 +983,10 @@ def print_menu():
 def main():
     """
     Main entry point for autonomous vehicle testing system.
-    
-    Provides menu-driven interface for validating all subsystems
-    and complete integration testing.
     """
+    # Ensure stdout is flushed for SSH stability
+    sys.stdout.flush()
+
     print("\n" + "="*60)
     print("AUTONOMOUS VEHICLE TESTING SYSTEM")
     print("Enhanced v2.0 with Comprehensive Logging")
@@ -996,31 +996,48 @@ def main():
     print("Target User: Jonathan (77) - Wheelchair User")
     print("="*60 + "\n")
     
-    # Create instances (delayed initialization for motor safety)
-    vehicle_sim = AutonomousVehicle(simulation_mode=True, enable_logging=True)
+    # Start with both as None to keep GPIO pins free
+    vehicle_sim = None
     vehicle_live = None
     
     while True:
+        # Flush the buffer to ensure the terminal is ready for fresh input
+        if sys.stdin.isatty():
+            try:
+                import termios
+                termios.tcflush(sys.stdin, termios.TCIFLUSH)
+            except ImportError:
+                pass
+
         print_menu()
         choice = input("Select test (1-5): ").strip()
         
+        if not choice:
+            continue
+
         if choice == '1':
-            # Heartbeat requires real hardware
             print("\n[INFO] Initializing hardware interface...")
+            # Release sim instance if it exists
+            if vehicle_sim is not None:
+                vehicle_sim = None
+                time.sleep(0.2)
+
             if vehicle_live is None:
                 vehicle_live = AutonomousVehicle(simulation_mode=False, enable_logging=True)
             vehicle_live.run_heartbeat_test()
             
-        elif choice == '2':
-            # Vision-only test (safe - no motors)
-            vehicle_sim.run_vision_test()
+        elif choice == '2' or choice == '3':
+            # Initialize SIM mode ONLY when Choice 2 or 3 is selected
+            if vehicle_sim is None:
+                print("\n[INFO] Initializing simulation subsystems...")
+                vehicle_sim = AutonomousVehicle(simulation_mode=True, enable_logging=True)
             
-        elif choice == '3':
-            # Integration in simulation mode
-            vehicle_sim.run_integration_test()
+            if choice == '2':
+                vehicle_sim.run_vision_test()
+            else:
+                vehicle_sim.run_integration_test()
             
-elif choice == '4':
-            # Full system with motors
+        elif choice == '4':
             print("\n" + "="*60)
             print("⚠ WARNING: LIVE MOTOR MODE")
             print("="*60)
@@ -1034,11 +1051,6 @@ elif choice == '4':
             print("  - Press 'o' to activate manual override")
             print("  - Press 'q' to quit safely")
             
-            # Flush the buffer to ensure the terminal is ready for input
-            if sys.stdin.isatty():
-                import termios
-                termios.tcflush(sys.stdin, termios.TCIFLUSH)
-            
             confirm = input("\nType 'CONFIRM' to proceed: ").strip()
             
             if confirm == 'CONFIRM':
@@ -1046,6 +1058,7 @@ elif choice == '4':
                 if vehicle_sim is not None:
                     print("\n[INFO] Releasing simulation hardware resources...")
                     vehicle_sim = None 
+                    time.sleep(0.5) # Allow hardware bus to settle
                 
                 print("[INFO] Initializing hardware interface...")
                 if vehicle_live is None:
@@ -1058,19 +1071,12 @@ elif choice == '4':
             print("\n" + "="*60)
             print("SHUTTING DOWN")
             print("="*60)
-            
-            # Safe shutdown
             if vehicle_live and vehicle_live.motor_control:
-                print("\n[SAFETY] Executing emergency stop...")
                 vehicle_live.motor_control.emergency_stop()
-            
-            print("\n[SHUTDOWN] All systems stopped")
-            print("Goodbye!\n")
             break
             
         else:
-            print("\n[ERROR] Invalid choice. Please select 1-5.")
-
+            print(f"\n[ERROR] Invalid choice '{choice}'. Please select 1-5.")
 
 if __name__ == "__main__":
     try:
