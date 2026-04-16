@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Autonomous Vehicle Testing & Integration - Enhanced v2.0
+Autonomous Vehicle Testing & Integration - Enhanced v2.1
 Student: Benyamin Mahamed (W1966430)
 Project: Autonomous Self-Driving Car for Assisted Mobility
 
@@ -14,26 +14,35 @@ System Architecture (Integrated - Pi 5 Only):
     - Lane Detection (Classical CV: Canny + Hough)
     - Obstacle Detection (Blob Detection)
     - Motor Control (DC motors + steering servo)
-    - Remote Override (Manual control takeover)
+    - Remote Override (Manual control takeover — thread-safe)
     - Data Fusion (Priority-based decision logic)
 
 Safety Hierarchy (Highest to Lowest Priority):
-    1. Manual Override (FR3.1)
+    1. Manual Override  (FR3.1)   ← thread-safe via manual_override_flag
     2. Obstacle Detection (FR2.2, NFR-S1)
     3. Autonomous Navigation (FR1.1)
     4. Stopped State
 
 Performance Targets:
-    - NFR-P1: Latency < 200ms (Achieved: ~2.4ms, 83× better)
-    - NFR-P2: FPS ≥ 8 (Achieved: ~14 FPS, 1.8× better)
-    - NFR-S1: Obstacle E-Stop 100% reliable
-    - NFR-S2: Manual E-Stop 100% reliable
+    - NFR-P1: Latency < 200ms   (Achieved: ~7.7ms–15.6ms)
+    - NFR-P2: FPS ≥ 8           (Achieved: ~14 FPS X11 / ~25-40 FPS headless)
+    - NFR-S1: Obstacle E-Stop   100% reliable
+    - NFR-S2: Manual E-Stop     100% reliable
+
+v2.1 Changes:
+    - RemoteOverride now runs a background daemon thread (OverrideListener)
+      that reads raw stdin — completely independent of cv2.waitKey / X11 focus.
+    - manual_override_flag (threading.Event) is checked each frame; the 'o'
+      key in cv2.waitKey is kept as a secondary fallback only.
+    - MANUAL mode label now renders in MAGENTA (255, 0, 255) for clear
+      Priority 1 validation evidence.
+    - _create_full_display() updated with correct colour mapping for all modes.
 """
 
 from control_logic import RobotMuscle
 from lane_detection import LaneDetector
 from object_detection import ObstacleDetector
-from remote_override import RemoteOverride
+from remote_override import RemoteOverride, manual_override_flag   # ← v2.1
 import cv2
 import time
 import config
@@ -47,58 +56,60 @@ import json
 
 
 # ============================================================================
+# MODE COLOUR MAP  (single source of truth used by all display functions)
+# ============================================================================
+
+MODE_COLOURS = {
+    "MANUAL":       (255,   0, 255),   # Magenta  — Priority 1 (FR3.1)
+    "OBSTACLE STOP":(  0,   0, 255),   # Red      — Priority 2 (NFR-S1)
+    "AUTONOMOUS":   (  0, 255,   0),   # Green    — Priority 3 (FR1.1)
+    "STOPPED":      (128, 128, 128),   # Grey     — Default idle
+}
+
+
+# ============================================================================
 # PERFORMANCE LOGGER - Data Collection & Validation
 # ============================================================================
 
 class PerformanceLogger:
     """
     Comprehensive data logging system for performance validation.
-    
+
     Addresses IPD feedback: "some features incomplete or unclear"
     Provides evidence for all NFR requirements through detailed logging.
-    
+
     Logs:
         - Frame-by-frame metrics (CSV)
         - Session summaries (JSON)
         - Event logs (JSONL)
         - Performance statistics
     """
-    
+
     def __init__(self, log_dir: str = "test_logs"):
-        """
-        Initialize logging system.
-        
-        Args:
-            log_dir: Directory to store log files
-        """
         self.log_dir = log_dir
         os.makedirs(log_dir, exist_ok=True)
-        
-        # Create unique session identifier
+
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # CSV file for frame-by-frame metrics
+
         self.metrics_file = os.path.join(log_dir, f"metrics_{self.session_id}.csv")
         self._init_metrics_log()
-        
-        # JSON file for session summary
+
         self.summary_file = os.path.join(log_dir, f"summary_{self.session_id}.json")
         self.session_data = {
-            'session_id': self.session_id,
-            'start_time': time.time(),
-            'start_time_readable': datetime.now().isoformat(),
-            'frames_processed': 0,
-            'emergency_stops': 0,
-            'mode_changes': 0,
-            'total_latency_ms': 0,
-            'errors': [],
-            'test_mode': None
+            'session_id':           self.session_id,
+            'start_time':           time.time(),
+            'start_time_readable':  datetime.now().isoformat(),
+            'frames_processed':     0,
+            'emergency_stops':      0,
+            'mode_changes':         0,
+            'total_latency_ms':     0,
+            'errors':               [],
+            'test_mode':            None
         }
-        
-        print(f"[LOGGER] Session {self.session_id} - Logging to {log_dir}/")
-    
+
+        print(f"[LOGGER] Session {self.session_id} — Logging to {log_dir}/")
+
     def _init_metrics_log(self):
-        """Initialize CSV file with headers"""
         with open(self.metrics_file, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow([
@@ -106,15 +117,8 @@ class PerformanceLogger:
                 'steering_angle', 'lane_offset', 'confidence',
                 'obstacle_detected', 'distance_estimate', 'mode', 'speed'
             ])
-    
+
     def log_frame(self, frame_id: int, metrics: Dict[str, Any]):
-        """
-        Log metrics for a single frame.
-        
-        Args:
-            frame_id: Frame number
-            metrics: Dictionary containing frame metrics
-        """
         with open(self.metrics_file, 'a', newline='') as f:
             writer = csv.writer(f)
             writer.writerow([
@@ -130,67 +134,55 @@ class PerformanceLogger:
                 metrics.get('mode', 'UNKNOWN'),
                 metrics.get('speed', 0)
             ])
-        
-        self.session_data['frames_processed'] += 1
-        self.session_data['total_latency_ms'] += metrics.get('latency_ms', 0)
-    
+
+        self.session_data['frames_processed']  += 1
+        self.session_data['total_latency_ms']  += metrics.get('latency_ms', 0)
+
     def log_event(self, event_type: str, details: str):
-        """
-        Log important system events.
-        
-        Args:
-            event_type: Type of event ('emergency_stop', 'mode_change', 'error')
-            details: Event description
-        """
         event = {
-            'timestamp': time.time(),
+            'timestamp':     time.time(),
             'time_readable': datetime.now().isoformat(),
-            'type': event_type,
-            'details': details
+            'type':          event_type,
+            'details':       details
         }
-        
-        # Update counters
+
         if event_type == 'emergency_stop':
             self.session_data['emergency_stops'] += 1
         elif event_type == 'mode_change':
             self.session_data['mode_changes'] += 1
         elif event_type == 'error':
             self.session_data['errors'].append(details)
-        
-        # Append to events log
+
         events_file = os.path.join(self.log_dir, f"events_{self.session_id}.jsonl")
         with open(events_file, 'a') as f:
             f.write(json.dumps(event) + '\n')
-        
+
         print(f"[EVENT] {event_type.upper()}: {details}")
-    
+
     def set_test_mode(self, mode: str):
-        """Set the current test mode"""
         self.session_data['test_mode'] = mode
-    
+
     def save_summary(self):
-        """Save session summary with performance statistics"""
-        self.session_data['end_time'] = time.time()
+        self.session_data['end_time']          = time.time()
         self.session_data['end_time_readable'] = datetime.now().isoformat()
-        self.session_data['duration_seconds'] = (
+        self.session_data['duration_seconds']  = (
             self.session_data['end_time'] - self.session_data['start_time']
         )
-        
-        # Calculate average latency
+
         if self.session_data['frames_processed'] > 0:
             self.session_data['avg_latency_ms'] = (
-                self.session_data['total_latency_ms'] / 
+                self.session_data['total_latency_ms'] /
                 self.session_data['frames_processed']
             )
         else:
             self.session_data['avg_latency_ms'] = 0
-        
+
         with open(self.summary_file, 'w') as f:
             json.dump(self.session_data, f, indent=2)
-        
+
         print(f"\n[LOGGER] Session summary saved to {self.summary_file}")
         print(f"[LOGGER] Frames processed: {self.session_data['frames_processed']}")
-        print(f"[LOGGER] Average latency: {self.session_data['avg_latency_ms']:.2f}ms")
+        print(f"[LOGGER] Average latency:  {self.session_data['avg_latency_ms']:.2f}ms")
 
 
 # ============================================================================
@@ -200,78 +192,55 @@ class PerformanceLogger:
 class Camera:
     """
     Camera wrapper using Picamera2 for Raspberry Pi 5.
-    
-    Provides robust initialization and error handling for FR4.2 (Remote Monitoring).
+    Provides robust initialisation and error handling (FR4.2).
     """
-    
+
     def __init__(self, width: int = 640, height: int = 480):
-        """
-        Initialize Picamera2 camera.
-        
-        Args:
-            width: Frame width in pixels
-            height: Frame height in pixels
-        """
-        self.width = width
+        self.width  = width
         self.height = height
         self.camera = None
-        
+
         try:
             from picamera2 import Picamera2
-            print(f"[CAMERA] Initializing Picamera2 ({width}x{height})...")
-            
+            print(f"[CAMERA] Initialising Picamera2 ({width}x{height})...")
+
             self.camera = Picamera2()
-            
-            # Configure for Pi camera
             camera_config = self.camera.create_preview_configuration(
                 main={"size": (width, height), "format": "RGB888"}
             )
-            
             self.camera.configure(camera_config)
             self.camera.start()
-            
-            # Wait for camera to stabilize
             time.sleep(2)
-            
-            print("[CAMERA] SUCCESS - Picamera2 ready")
-            
+
+            print("[CAMERA] SUCCESS — Picamera2 ready")
+
         except Exception as e:
-            print(f"[CAMERA] Failed to initialize: {e}")
+            print(f"[CAMERA] Failed to initialise: {e}")
             import traceback
             traceback.print_exc()
             self.camera = None
-    
+
     def is_opened(self) -> bool:
-        """Check if camera is operational"""
         return self.camera is not None
-    
+
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:
-        """
-        Capture a frame from the camera.
-        
-        Returns:
-            Tuple of (success: bool, frame: np.ndarray or None)
-        """
         if self.camera is None:
             return False, None
-        
         try:
             frame = self.camera.capture_array()
-            # Convert RGB to BGR for OpenCV compatibility
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             return True, frame
         except Exception as e:
             print(f"[CAMERA] Read error: {e}")
             return False, None
-    
+
     def release(self):
-        """Release camera resources"""
         if self.camera:
             try:
                 self.camera.stop()
                 self.camera.close()
                 print("[CAMERA] Released")
-            except:
+            except Exception:
                 pass
 
 
@@ -283,17 +252,18 @@ class AutonomousVehicle:
     """
     Main system integrating vision, obstacle detection, and control.
     Shared hardware architecture to prevent GPIO pin conflicts.
+
+    v2.1: RemoteOverride background listener started automatically on init.
+          manual_override_flag drives mode selection each frame.
     """
-    
+
     def __init__(self, simulation_mode: bool = False, enable_logging: bool = True):
-        """
-        Initialize autonomous vehicle system.
-        """
         self.simulation_mode = simulation_mode
-        self.enable_logging = enable_logging
-        
-        # 1. SHARED HARDWARE INITIALIZATION
-        # We create the hardware brain ONCE here to be shared by all subsystems.
+        self.enable_logging  = enable_logging
+
+        # ------------------------------------------------------------------
+        # 1. SHARED HARDWARE
+        # ------------------------------------------------------------------
         self.shared_px = None
         if not self.simulation_mode:
             try:
@@ -301,18 +271,22 @@ class AutonomousVehicle:
                 self.shared_px = Picarx()
                 print("[INIT] ✓ Shared hardware interface (Picarx) ready")
             except Exception as e:
-                print(f"[INIT] ✗ Hardware initialization failed: {e}")
+                print(f"[INIT] ✗ Hardware initialisation failed: {e}")
                 self.shared_px = None
 
-        # 2. SUBSYSTEM INITIALIZATION
-        print("[INIT] Initializing subsystems...")
-        self.lane_detector = LaneDetector()
+        # ------------------------------------------------------------------
+        # 2. SUBSYSTEMS
+        # ------------------------------------------------------------------
+        print("[INIT] Initialising subsystems...")
+        self.lane_detector     = LaneDetector()
         self.obstacle_detector = ObstacleDetector()
-        
-        # Pass the shared hardware instance to RemoteOverride
+
+        # Pass shared hardware to RemoteOverride
         self.remote_override = RemoteOverride(picarx_instance=self.shared_px)
-        
-        # Initialize logger if enabled
+
+        # ------------------------------------------------------------------
+        # 3. LOGGER
+        # ------------------------------------------------------------------
         if self.enable_logging:
             self.logger = PerformanceLogger()
             self.lane_detector.set_event_callback(self.logger.log_event)
@@ -320,39 +294,39 @@ class AutonomousVehicle:
             self.remote_override.set_event_callback(self.logger.log_event)
         else:
             self.logger = None
-        
-        # 3. MOTOR CONTROL INITIALIZATION
+
+        # ------------------------------------------------------------------
+        # 4. MOTOR CONTROL
+        # ------------------------------------------------------------------
         if not simulation_mode:
-            # Pass the same shared hardware instance to RobotMuscle
             self.motor_control = RobotMuscle(picarx_instance=self.shared_px)
             if self.logger:
                 self.motor_control.set_event_callback(self.logger.log_event)
-            print("[INIT] ✓ Full system initialized - MOTORS ACTIVE")
+            print("[INIT] ✓ Full system initialised — MOTORS ACTIVE")
         else:
             self.motor_control = None
-            print("[INIT] ✓ Simulation mode - motors disabled")
-        
-        self.running = False
+            print("[INIT] ✓ Simulation mode — motors disabled")
+
+        # ------------------------------------------------------------------
+        # 5. START BACKGROUND OVERRIDE LISTENER  ← v2.1
+        #    Reads raw stdin in a daemon thread — no X11 focus needed.
+        #    Press 'o' in ANY terminal window to toggle MANUAL mode.
+        # ------------------------------------------------------------------
+        self.remote_override.start_listener()
+
+        self.running           = False
         self.autonomous_active = False
-    
+
+    # -----------------------------------------------------------------------
+    # Camera helpers
+    # -----------------------------------------------------------------------
+
     def _open_camera(self, max_retries: int = 3) -> Tuple[Optional[Camera], bool]:
-        """
-        Open camera with robust error handling and retry logic.
-        
-        Args:
-            max_retries: Maximum number of initialization attempts
-            
-        Returns:
-            Tuple of (camera: Camera or None, success: bool)
-        """
         print("\n[CAMERA] Opening camera...")
-        
         for attempt in range(max_retries):
             try:
                 cap = Camera(config.CAMERA_WIDTH, config.CAMERA_HEIGHT)
-                
                 if cap.is_opened():
-                    # Test capture
                     ret, test_frame = cap.read()
                     if ret and test_frame is not None:
                         print(f"[CAMERA] ✓ Test frame OK: {test_frame.shape}")
@@ -360,106 +334,96 @@ class AutonomousVehicle:
                     else:
                         print(f"[CAMERA] ✗ Test frame failed (attempt {attempt + 1}/{max_retries})")
                         cap.release()
-                
+
                 if attempt < max_retries - 1:
-                    print(f"[CAMERA] Retrying in 2 seconds...")
+                    print("[CAMERA] Retrying in 2 seconds...")
                     time.sleep(2)
-                    
+
             except Exception as e:
                 print(f"[CAMERA] Error on attempt {attempt + 1}: {e}")
                 if self.logger:
                     self.logger.log_event('error', f"Camera init failed: {e}")
-                
                 if attempt < max_retries - 1:
                     time.sleep(2)
-        
+
         print("[CAMERA] ✗ Failed after all retries")
         return None, False
-    
+
+    # -----------------------------------------------------------------------
+    # Test Modes
+    # -----------------------------------------------------------------------
+
     def run_heartbeat_test(self):
-        """
-        Hardware validation test - servos and motors.
-        Validates FR1.2 (system integration) at hardware level.
-        """
+        """Hardware validation — servos and motors (FR1.2)."""
         if self.simulation_mode:
             print("[SKIP] Heartbeat test (simulation mode)")
             return
-        
+
         if self.logger:
             self.logger.set_test_mode("heartbeat")
-        
+
         print("\n" + "="*60)
-        print("HEARTBEAT TEST - Hardware Validation")
+        print("HEARTBEAT TEST — Hardware Validation")
         print("="*60)
-        
+
         try:
             print("\n[1/2] Testing camera servos...")
             self.motor_control.test_servos()
-            
             if self.logger:
                 self.logger.log_event('hardware_test', 'Servo test completed')
-            
+
             input("Press ENTER to test motors (ensure clear space)...")
             print("\n[2/2] Testing motors...")
             self.motor_control.test_motors()
-            
             if self.logger:
                 self.logger.log_event('hardware_test', 'Motor test completed')
-            
-            print("\n✓ Heartbeat test complete - hardware operational")
-            
+
+            print("\n✓ Heartbeat test complete — hardware operational")
+
         except Exception as e:
             print(f"\n✗ Heartbeat test failed: {e}")
             if self.logger:
                 self.logger.log_event('error', f"Heartbeat test failed: {e}")
             self.motor_control.emergency_stop()
-        
+
         finally:
             if self.logger:
                 self.motor_control.print_statistics()
                 self.logger.save_summary()
-    
+
     def run_vision_test(self):
         """
-        Vision-only testing - Lane Detection Algorithm Validation.
-        Tests FR1.1 (Lane Detection) and NFR-P1 (Latency < 200ms), NFR-P2 (FPS ≥ 8).
+        Vision-only testing — Lane Detection Algorithm Validation.
+        Validates FR1.1, NFR-P1 (< 200ms), NFR-P2 (≥ 8 FPS).
         """
         if self.logger:
             self.logger.set_test_mode("vision_test")
-        
+
         print("\n" + "="*60)
-        print("VISION TEST - Lane Detection (Classical CV)")
+        print("VISION TEST — Lane Detection (Classical CV)")
         print("="*60)
-        print("\nThis test validates:")
-        print("  - FR1.1: Lane boundary detection")
-        print("  - NFR-P1: Latency < 200ms")
-        print("  - NFR-P2: Frame rate ≥ 8 FPS")
-        print("\nControls:")
-        print("  'q' - Quit test")
-        print("  's' - Save current frame")
-        print("  'p' - Pause/Resume")
-        
-        # Open camera
+        print("\nValidates: FR1.1 | NFR-P1 (latency) | NFR-P2 (FPS)")
+        print("Controls:  'q' Quit | 's' Save frame | 'p' Pause/Resume")
+
         cap, success = self._open_camera()
         if not success:
             if self.logger:
                 self.logger.save_summary()
             return
-        
-        # Warm up camera
+
         print("\n[CAMERA] Warming up...")
         warmup_success = False
         for i in range(10):
             ret, frame = cap.read()
             if ret and frame is not None:
-                print(f"  Warmup frame {i+1}: OK - Shape: {frame.shape}")
+                print(f"  Warmup frame {i+1}: OK — Shape: {frame.shape}")
                 warmup_success = True
                 if i >= 3:
                     break
             else:
                 print(f"  Warmup frame {i+1}: Failed")
             time.sleep(0.1)
-        
+
         if not warmup_success:
             print("[ERROR] Camera warmup failed")
             if self.logger:
@@ -467,17 +431,18 @@ class AutonomousVehicle:
                 self.logger.save_summary()
             cap.release()
             return
-        
+
         print("[CAMERA] Ready! Starting detection...\n")
-        
-        frame_count = 0
-        fps_start = time.time()
-        latencies = []
+
+        frame_count    = 0
+        fps_start      = time.time()
+        latencies      = []
         steering_angles = []
-        confidences = []
-        paused = False
-        fps = 0.0
-        
+        confidences    = []
+        paused         = False
+        fps            = 0.0
+        display_frame  = None
+
         try:
             while True:
                 if not paused:
@@ -486,65 +451,57 @@ class AutonomousVehicle:
                         print("[WARN] Failed to grab frame, retrying...")
                         time.sleep(0.1)
                         continue
-                    
+
                     frame_count += 1
-                    
-                    # Measure latency (NFR-P1)
-                    start_time = time.time()
-                    result = self.lane_detector.process_frame(frame)
-                    latency_ms = (time.time() - start_time) * 1000
-                    
-                    # Track metrics
+                    start_time   = time.time()
+                    result       = self.lane_detector.process_frame(frame)
+                    latency_ms   = (time.time() - start_time) * 1000
+
                     latencies.append(latency_ms)
                     steering_angles.append(result['steering_angle'])
                     confidences.append(result['confidence'])
-                    
-                    # Calculate FPS
+
                     elapsed = time.time() - fps_start
-                    fps = frame_count / elapsed if elapsed > 0 else 0.0
-                    
-                    # Log to file
+                    fps     = frame_count / elapsed if elapsed > 0 else 0.0
+
                     if self.logger:
                         self.logger.log_frame(frame_count, {
-                            'fps': fps,
-                            'latency_ms': latency_ms,
-                            'steering_angle': result['steering_angle'],
-                            'lane_offset': result['lane_offset'],
-                            'confidence': result['confidence'],
+                            'fps':               fps,
+                            'latency_ms':        latency_ms,
+                            'steering_angle':    result['steering_angle'],
+                            'lane_offset':       result['lane_offset'],
+                            'confidence':        result['confidence'],
                             'obstacle_detected': False,
                             'distance_estimate': 0,
-                            'mode': 'VISION_TEST',
-                            'speed': 0
+                            'mode':              'VISION_TEST',
+                            'speed':             0
                         })
-                    
-                    # Display
-                    display_frame = result['debug_frame'] if result['debug_frame'] is not None else frame
-                    
-                    # Add metrics overlay
+
+                    display_frame = (result['debug_frame']
+                                     if result['debug_frame'] is not None
+                                     else frame)
                     self._draw_vision_metrics(display_frame, latency_ms, fps, result)
-                    
                     cv2.imshow('Lane Detection Test', display_frame)
-                    
-                    # Print periodic stats
+
                     if frame_count % 30 == 0:
-                        avg_lat = np.mean(latencies[-30:]) if len(latencies) >= 30 else np.mean(latencies)
+                        avg_lat = (np.mean(latencies[-30:])
+                                   if len(latencies) >= 30 else np.mean(latencies))
                         print(f"Frame {frame_count:4d} | FPS: {fps:4.1f} | "
                               f"Latency: {avg_lat:5.1f}ms | "
                               f"Steer: {result['steering_angle']:+4d}deg | "
                               f"Conf: {result['confidence']:.2f}")
-                
-                # Handle keyboard
+
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     break
-                elif key == ord('s'):
+                elif key == ord('s') and display_frame is not None:
                     filename = f"lane_test_{frame_count}.jpg"
                     cv2.imwrite(filename, display_frame)
                     print(f"[SAVED] {filename}")
                 elif key == ord('p'):
                     paused = not paused
                     print(f"[{'PAUSED' if paused else 'RESUMED'}]")
-        
+
         except KeyboardInterrupt:
             print("\n[INTERRUPT] Test stopped by user")
         except Exception as e:
@@ -553,76 +510,75 @@ class AutonomousVehicle:
                 self.logger.log_event('error', f"Vision test exception: {e}")
             import traceback
             traceback.print_exc()
-        
         finally:
             cap.release()
             cv2.destroyAllWindows()
-            
-            # Print comprehensive summary
-            if latencies and len(latencies) > 0:
+            if latencies:
                 self._print_vision_summary(latencies, steering_angles, confidences, fps)
             else:
-                print("\n[INFO] No frames processed - cannot generate summary")
-            
-            # Print detector statistics
+                print("\n[INFO] No frames processed — cannot generate summary")
             self.lane_detector.print_statistics()
-            
-            # Save logger summary
             if self.logger:
                 self.logger.save_summary()
-    
 
     def run_integration_test(self):
         """
         Full Integration Test with ALL safety features.
-        Fixed directional logic: Aligned CV coordinates with physical actuators.
+
+        v2.1 Override behaviour:
+            - 'o' key pressed in the TERMINAL toggles override via background
+              thread (no X11 focus needed) — primary method.
+            - 'o' key in cv2.waitKey is kept as a secondary fallback.
+            - manual_override_flag drives mode selection — single source of truth.
+            - MANUAL state renders in MAGENTA for Priority 1 validation screenshot.
         """
         if self.logger:
-            self.logger.set_test_mode("integration_test" + 
-                                      ("_simulation" if self.simulation_mode else "_live"))
-        
+            self.logger.set_test_mode(
+                "integration_test" +
+                ("_simulation" if self.simulation_mode else "_live")
+            )
+
         print("\n" + "="*60)
-        print(f"FULL INTEGRATION TEST - {'SIMULATION' if self.simulation_mode else 'LIVE MOTORS'}")
+        print(f"FULL INTEGRATION TEST — "
+              f"{'SIMULATION' if self.simulation_mode else 'LIVE MOTORS'}")
         print("="*60)
-        
+
         if not self.simulation_mode:
-            print("\n ⚠ WARNING: Motors will move!")
+            print("\n ⚠  WARNING: Motors will move!")
             print("Requirements:")
-            print("  - Vehicle must be on track")
+            print("  - Vehicle on track with clear lane markings")
             print("  - Clear path ahead")
-            print("  - Emergency stop accessible")
+            print("  - Emergency stop accessible (ESC)")
             response = input("\nContinue? (yes/no): ")
             if response.lower() != 'yes':
                 print("Aborted.")
                 return
-        
+
         print("\nControls:")
-        print("  SPACE - Start/Stop autonomous mode")
-        print("  'o' - Toggle manual override ON/OFF")
-        print("  WASD - Manual control (when override active)")
-        print("  ESC - Emergency stop")
-        print("  'q' - Quit")
-        
-        # Open camera
+        print("  SPACE      — Start / Stop autonomous mode")
+        print("  'o'        — Toggle MANUAL override (terminal key — no X11 focus needed)")
+        print("  WASD       — Manual drive commands (when override active, OpenCV window)")
+        print("  ESC        — Emergency stop")
+        print("  'q'        — Quit")
+
         cap, success = self._open_camera()
         if not success:
             if self.logger:
                 self.logger.save_summary()
             return
-        
-        # Warm up
+
         print("\n[CAMERA] Warming up...")
-        for i in range(5):
+        for _ in range(5):
             cap.read()
         time.sleep(0.5)
         print("[CAMERA] Ready!\n")
-        
-        self.running = True
+
+        self.running           = True
         self.autonomous_active = False
-        frame_count = 0
-        fps_start = time.time()
-        fps = 0.0
-        
+        frame_count            = 0
+        fps_start              = time.time()
+        fps                    = 0.0
+
         try:
             while self.running:
                 ret, frame = cap.read()
@@ -630,122 +586,151 @@ class AutonomousVehicle:
                     print("[WARN] Frame grab failed, retrying...")
                     time.sleep(0.1)
                     continue
-                
+
                 frame_count += 1
-                start_time = time.time()
-                
-                # Subsystem Processing
-                lane_result = self.lane_detector.process_frame(frame)
+                start_time   = time.time()
+
+                # Vision pipeline
+                lane_result     = self.lane_detector.process_frame(frame)
                 obstacle_result = self.obstacle_detector.detect_obstacle(frame)
-                latency_ms = (time.time() - start_time) * 1000
-                
-                # DECISION LOGIC (Data Fusion with Safety Priority)
-                if self.remote_override.is_active():
-                    mode = "MANUAL"
-                    speed = 0  
-                    
+                latency_ms      = (time.time() - start_time) * 1000
+
+                # ----------------------------------------------------------
+                # DECISION LOGIC — Priority-based data fusion
+                # manual_override_flag is the single source of truth for
+                # Priority 1.  Set/cleared by the background listener thread.
+                # ----------------------------------------------------------
+
+                if manual_override_flag.is_set():
+                    # PRIORITY 1: MANUAL OVERRIDE (FR3.1)
+                    mode  = "MANUAL"
+                    speed = 0
+                    # Motors are managed by process_manual_command() calls below
+
                 elif obstacle_result['obstacle_detected']:
-                    # PRIORITY 2: SAFETY - Obstacle detected!
-                    mode = "OBSTACLE STOP"
+                    # PRIORITY 2: OBSTACLE STOP (NFR-S1)
+                    mode  = "OBSTACLE STOP"
                     speed = 0
                     if not self.simulation_mode:
                         self.motor_control.emergency_stop()
-                    # Change: Log the distance to see why it's stopping
-                    if frame_count % 10 == 0: 
-                        print(f"[SAFETY] STOP: Obstacle at {obstacle_result['distance_estimate']}cm")
-                    
+                    if frame_count % 10 == 0:
+                        print(f"[SAFETY] STOP — Obstacle at "
+                              f"{obstacle_result['distance_estimate']}cm")
+
                 elif self.autonomous_active:
-                    # PRIORITY 3: AUTONOMOUS MODE - lane following
+                    # PRIORITY 3: AUTONOMOUS LANE FOLLOWING (FR1.1)
                     mode = "AUTONOMOUS"
-                    
-                    # --- STEERING CALIBRATION & DAMPENING ---
-                    # 1. Multiply by -1 to fix the inverted steering
-                    # 2. Multiply by 0.7 to dampen the turn (prevents "turning out")
-                    raw_steering = lane_result.get('steering_angle', 0)
+
+                    # Invert and dampen steering to match physical actuator
+                    raw_steering   = lane_result.get('steering_angle', 0)
                     steering_angle = (raw_steering * -1) * 0.7
-                    
-                    # 2. SET THE SPEED
+
                     if lane_result['confidence'] > 0.5:
                         speed = config.BASE_SPEED
                     elif lane_result['confidence'] > 0.2:
                         speed = config.MIN_SPEED
                     else:
-                        speed = 0  # Safety stop if line is lost
-                    
-                    # 3. COMMAND THE HARDWARE
+                        speed = 0   # Lost lane — safety stop
+
                     if not self.simulation_mode:
                         self.motor_control.px.backward(speed)
                         self.motor_control.px.set_dir_servo_angle(steering_angle)
-                        
-                        # Monitor the logic live
                         if frame_count % 5 == 0:
-                            print(f"AUTO -> Steer: {steering_angle:.1f} | Conf: {lane_result['confidence']:.2f}")
+                            print(f"AUTO → Steer: {steering_angle:.1f}° | "
+                                  f"Conf: {lane_result['confidence']:.2f}")
                 else:
-                    mode = "STOPPED"
+                    # DEFAULT: STOPPED
+                    mode  = "STOPPED"
                     speed = 0
                     if not self.simulation_mode:
                         self.motor_control.emergency_stop()
-                
-                # Performance Tracking
+
+                # ----------------------------------------------------------
+                # Performance logging
+                # ----------------------------------------------------------
                 elapsed = time.time() - fps_start
-                fps = frame_count / elapsed if elapsed > 0 else 0.0
-                
+                fps     = frame_count / elapsed if elapsed > 0 else 0.0
+
                 if self.logger:
                     self.logger.log_frame(frame_count, {
-                        'fps': fps,
-                        'latency_ms': latency_ms,
-                        'steering_angle': lane_result['steering_angle'],
-                        'lane_offset': lane_result['lane_offset'],
-                        'confidence': lane_result['confidence'],
+                        'fps':               fps,
+                        'latency_ms':        latency_ms,
+                        'steering_angle':    lane_result['steering_angle'],
+                        'lane_offset':       lane_result['lane_offset'],
+                        'confidence':        lane_result['confidence'],
                         'obstacle_detected': obstacle_result['obstacle_detected'],
                         'distance_estimate': obstacle_result['distance_estimate'],
-                        'mode': mode,
-                        'speed': speed
+                        'mode':              mode,
+                        'speed':             speed
                     })
-                
-                # Visualization (Safe Display Wrapper)
-                display_frame = self._create_full_display(frame, lane_result, obstacle_result, mode, fps, latency_ms)
-                
+
+                # ----------------------------------------------------------
+                # Display
+                # ----------------------------------------------------------
+                display_frame = self._create_full_display(
+                    frame, lane_result, obstacle_result, mode, fps, latency_ms
+                )
+
                 if os.environ.get('DISPLAY'):
                     try:
                         cv2.imshow('Full Integration Test', display_frame)
-                    except:
+                    except Exception:
                         pass
-                
+
+                # ----------------------------------------------------------
+                # cv2.waitKey input — OpenCV window must have focus.
+                # 'o' here is a SECONDARY FALLBACK; the background thread
+                # (OverrideListener) is the PRIMARY override trigger.
+                # WASD still requires OpenCV window focus — this is by design
+                # (manual drive commands are intentional, not accidental).
+                # ----------------------------------------------------------
                 key = cv2.waitKey(1) & 0xFF
+
                 if key == ord('q'):
                     break
-                elif key == ord(' '):  # Toggle autonomous
-                    if not self.remote_override.is_active():
+
+                elif key == ord(' '):
+                    # Toggle autonomous — only if override is not active
+                    if not manual_override_flag.is_set():
                         self.autonomous_active = not self.autonomous_active
                         status = "STARTED" if self.autonomous_active else "STOPPED"
-                        print(f"\n[AUTO] {status}")
+                        print(f"\n[AUTO] Autonomous mode {status}")
                     else:
-                        print("[WARN] Disable override first!")
-                elif key == ord('o'):  # Toggle override
-                    if self.remote_override.is_active():
+                        print("[WARN] Deactivate manual override first ('o')")
+
+                elif key == ord('o'):
+                    # Secondary fallback: toggle override from OpenCV window
+                    if manual_override_flag.is_set():
                         self.remote_override.deactivate_override()
+                        print("[OVERRIDE] Deactivated via OpenCV window key")
                     else:
                         self.remote_override.activate_override()
                         self.autonomous_active = False
-                elif key == 27:  # ESC - Emergency stop
+                        print("[OVERRIDE] Activated via OpenCV window key")
+
+                elif key == 27:   # ESC — emergency stop
                     self.autonomous_active = False
                     self.remote_override.emergency_stop()
                     if not self.simulation_mode:
                         self.motor_control.emergency_stop()
-                
-                # Manual control keys
-                elif self.remote_override.is_active():
-                    if key == ord('w'): self.remote_override.process_manual_command('forward')
-                    elif key == ord('s'): self.remote_override.process_manual_command('backward')
-                    elif key == ord('a'): self.remote_override.process_manual_command('left')
-                    elif key == ord('d'): self.remote_override.process_manual_command('right')
-                    elif key == ord(' '): self.remote_override.process_manual_command('stop')
-        
+                    print("[SAFETY] Emergency stop — all systems halted")
+
+                # WASD manual drive — only processed when override is active
+                elif manual_override_flag.is_set():
+                    if key == ord('w'):
+                        self.remote_override.process_manual_command('forward')
+                    elif key == ord('s'):
+                        self.remote_override.process_manual_command('backward')
+                    elif key == ord('a'):
+                        self.remote_override.process_manual_command('left')
+                    elif key == ord('d'):
+                        self.remote_override.process_manual_command('right')
+
         except Exception as e:
             print(f"\n[ERROR] Integration test exception: {e}")
             import traceback
             traceback.print_exc()
+
         finally:
             self.running = False
             if not self.simulation_mode and self.motor_control:
@@ -753,143 +738,146 @@ class AutonomousVehicle:
             self.remote_override.emergency_stop()
             cap.release()
             cv2.destroyAllWindows()
-            
+
             print("\nSESSION STATISTICS")
             self.lane_detector.print_statistics()
             self.obstacle_detector.print_statistics()
             self.remote_override.print_statistics()
-            if self.logger: self.logger.save_summary()
+            if self.logger:
+                self.logger.save_summary()
+
+    # -----------------------------------------------------------------------
+    # Display helpers
+    # -----------------------------------------------------------------------
 
     def _create_full_display(self, frame: np.ndarray,
-                            lane_result: Dict, obstacle_result: Dict,
-                            mode: str, fps: float, latency_ms: float) -> np.ndarray:
+                             lane_result: Dict, obstacle_result: Dict,
+                             mode: str, fps: float,
+                             latency_ms: float) -> np.ndarray:
         """
         Create combined display with all system information.
+
+        Mode label colour comes from MODE_COLOURS so it is always consistent.
+        MANUAL renders in MAGENTA — required for Priority 1 validation evidence.
         """
         if lane_result['debug_frame'] is not None:
             display = lane_result['debug_frame'].copy()
         else:
             display = frame.copy()
-        
+
         if obstacle_result['debug_frame'] is not None:
             mask = np.all(obstacle_result['debug_frame'] == frame, axis=2)
             display[~mask] = obstacle_result['debug_frame'][~mask]
-        
+
         height, width = display.shape[:2]
+
+        # Semi-transparent info panel
         overlay = display.copy()
         cv2.rectangle(overlay, (10, 10), (450, 140), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.7, display, 0.3, 0, display)
-        
-        y = 35
-        metrics = [
+
+        # Metrics text
+        y        = 35
+        metrics  = [
             f"Mode: {mode}",
-            f"FPS: {fps:.1f} | Latency: {latency_ms:.1f}ms",
-            f"Lane Conf: {lane_result['confidence']:.2f}",
+            f"FPS: {fps:.1f}  |  Latency: {latency_ms:.1f}ms",
+            f"Lane Confidence: {lane_result['confidence']:.2f}",
             f"Obstacle: {'YES' if obstacle_result['obstacle_detected'] else 'NO'}"
         ]
-        
         for text in metrics:
-            cv2.putText(display, text, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(display, text, (20, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             y += 25
-        
-        mode_color = (0, 255, 0) if mode == "AUTONOMOUS" else (0, 0, 255)
-        cv2.putText(display, mode, (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 1.0, mode_color, 3)
+
+        # Large mode label — colour from MODE_COLOURS
+        mode_colour = MODE_COLOURS.get(mode, (255, 255, 255))
+        cv2.putText(display, mode, (10, height - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, mode_colour, 3)
+
         return display
 
     def _draw_vision_metrics(self, frame: np.ndarray, latency_ms: float,
-                            fps: float, result: Dict):
-        """Draw metrics overlay for vision testing"""
+                             fps: float, result: Dict):
+        """Draw metrics overlay for vision-only testing."""
         overlay = frame.copy()
         cv2.rectangle(overlay, (10, 10), (400, 160), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-        
+
         y = 35
-        latency_color = (0, 255, 0) if latency_ms < config.LATENCY_TARGET_MS else (0, 0, 255)
-        cv2.putText(frame, f"Latency: {latency_ms:.1f}ms", (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, latency_color, 2)
+        latency_colour = (
+            (0, 255, 0) if latency_ms < config.LATENCY_TARGET_MS else (0, 0, 255)
+        )
+        cv2.putText(frame, f"Latency: {latency_ms:.1f}ms", (20, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, latency_colour, 2)
         y += 25
-        
+
         metrics = [
             f"FPS: {fps:.1f}",
             f"Steering: {result['steering_angle']:+4d} deg",
-            f"Offset: {result['lane_offset']:+4d}px",
+            f"Offset:   {result['lane_offset']:+4d} px",
             f"Confidence: {result['confidence']:.2f}"
         ]
-        
         for text in metrics:
-            cv2.putText(frame, text, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(frame, text, (20, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             y += 25
-    
+
     def _print_vision_summary(self, latencies: list, steering_angles: list,
-                             confidences: list, fps: float):
-        """Print comprehensive vision test summary"""
+                              confidences: list, fps: float):
+        """Print comprehensive vision test summary."""
         print("\n" + "="*60)
         print("LANE DETECTION TEST SUMMARY")
         print("="*60)
-        
-        if not latencies or len(latencies) == 0:
+
+        if not latencies:
             print("No data collected")
             return
-        
-        # 1. Latency Analysis (NFR-P1)
-        avg_latency = np.mean(latencies)
-        max_latency = np.max(latencies)
-        min_latency = np.min(latencies)
+
+        avg_latency  = np.mean(latencies)
+        max_latency  = np.max(latencies)
+        min_latency  = np.min(latencies)
         latency_pass = avg_latency < config.LATENCY_TARGET_MS
-        
-        print(f"\n[1] LATENCY PERFORMANCE (NFR-P1: < {config.LATENCY_TARGET_MS}ms)")
-        print(f"    Average: {avg_latency:6.2f}ms {'✓ PASS' if latency_pass else '✗ FAIL'}")
+
+        print(f"\n[1] LATENCY (NFR-P1: < {config.LATENCY_TARGET_MS}ms)")
+        print(f"    Average: {avg_latency:6.2f}ms  "
+              f"{'✓ PASS' if latency_pass else '✗ FAIL'}")
         print(f"    Min:     {min_latency:6.2f}ms")
         print(f"    Max:     {max_latency:6.2f}ms")
         print(f"    Std Dev: {np.std(latencies):6.2f}ms")
-        
         if latency_pass:
-            improvement = config.LATENCY_TARGET_MS / avg_latency
-            print(f"    Performance: {improvement:.1f}× better than requirement")
-        
-        # 2. Frame Rate (NFR-P2)
+            print(f"    Performance: "
+                  f"{config.LATENCY_TARGET_MS / avg_latency:.1f}× better than target")
+
         fps_pass = fps >= config.MIN_FPS
         print(f"\n[2] FRAME RATE (NFR-P2: ≥ {config.MIN_FPS} FPS)")
-        print(f"    FPS: {fps:.1f} {'✓ PASS' if fps_pass else '✗ FAIL'}")
-        
+        print(f"    FPS: {fps:.1f}  {'✓ PASS' if fps_pass else '✗ FAIL'}")
         if fps_pass:
-            improvement = fps / config.MIN_FPS
-            print(f"    Performance: {improvement:.1f}× better than requirement")
-        
-        # 3. Steering Behavior
-        avg_steering = np.mean(np.abs(steering_angles))
+            print(f"    Performance: {fps / config.MIN_FPS:.1f}× better than target")
+
+        avg_steering        = np.mean(np.abs(steering_angles))
         steering_smoothness = np.sum(np.abs(np.diff(steering_angles)))
-        
-        print(f"\n[3] STEERING BEHAVIOR")
-        print(f"    Avg magnitude: {avg_steering:.1f} deg")
-        print(f"    Total changes: {steering_smoothness:.1f} deg (lower = smoother)")
-        print(f"    Max steering:  {np.max(np.abs(steering_angles)):.1f} deg")
-        
-        # 4. Detection Reliability
-        avg_confidence = np.mean(confidences)
-        low_conf_frames = np.sum(np.array(confidences) < 0.5)
-        low_conf_pct = (low_conf_frames / len(confidences)) * 100
-        
+        print(f"\n[3] STEERING BEHAVIOUR")
+        print(f"    Avg magnitude:  {avg_steering:.1f}°")
+        print(f"    Total changes:  {steering_smoothness:.1f}° (lower = smoother)")
+        print(f"    Max:            {np.max(np.abs(steering_angles)):.1f}°")
+
+        avg_confidence  = np.mean(confidences)
+        low_conf_frames = int(np.sum(np.array(confidences) < 0.5))
+        low_conf_pct    = (low_conf_frames / len(confidences)) * 100
         print(f"\n[4] DETECTION RELIABILITY")
         print(f"    Avg confidence:        {avg_confidence:.2f}")
-        print(f"    Low confidence (<0.5): {low_conf_frames} frames ({low_conf_pct:.1f}%)")
-        
-        # 5. Overall Assessment
-        passed_tests = sum([
-            latency_pass,
-            fps_pass,
-            avg_confidence > 0.5
-        ])
-        
-        print(f"\n[5] OVERALL ASSESSMENT")
-        print(f"    Tests passed: {passed_tests}/3")
-        
-        if passed_tests == 3:
+        print(f"    Low confidence (<0.5): "
+              f"{low_conf_frames} frames ({low_conf_pct:.1f}%)")
+
+        passed = sum([latency_pass, fps_pass, avg_confidence > 0.5])
+        print(f"\n[5] OVERALL: {passed}/3 tests passed")
+        if passed == 3:
             print("    Status: ✓ READY FOR INTEGRATION")
-        elif passed_tests >= 2:
-            print("    Status: ⚠ NEEDS TUNING")
+        elif passed >= 2:
+            print("    Status: ⚠  NEEDS TUNING")
         else:
-            print("    Status: ✗ REQUIRES OPTIMIZATION")
-        
+            print("    Status: ✗ REQUIRES OPTIMISATION")
+
         print("="*60 + "\n")
 
 
@@ -898,42 +886,34 @@ class AutonomousVehicle:
 # ============================================================================
 
 def print_menu():
-    """Display main testing menu"""
     print("\n" + "="*60)
-    print("AUTONOMOUS VEHICLE - TESTING SUITE v2.0")
+    print("AUTONOMOUS VEHICLE — TESTING SUITE v2.1")
     print("Student: Benyamin Mahamed (W1966430)")
-    print("Target: Jonathan (77) - Assisted Mobility Platform")
+    print("Target:  Jonathan (77) — Assisted Mobility Platform")
     print("="*60)
-    print("\n1. Heartbeat Test (Hardware validation)")
-    print("2. Vision Test (Lane detection only)")
-    print("3. Integration Test - SIMULATION (All systems)")
-    print("4. Integration Test - LIVE MOTORS (Full autonomous)")
+    print("\n1. Heartbeat Test        (Hardware validation)")
+    print("2. Vision Test           (Lane detection only)")
+    print("3. Integration Test      — SIMULATION (all systems)")
+    print("4. Integration Test      — LIVE MOTORS (full autonomous)")
     print("5. Exit")
     print()
 
 
 def main():
-    """
-    Main entry point for autonomous vehicle testing system.
-    """
-    # Ensure stdout is flushed for SSH stability
     sys.stdout.flush()
 
     print("\n" + "="*60)
-    print("AUTONOMOUS VEHICLE TESTING SYSTEM")
-    print("Enhanced v2.0 with Comprehensive Logging")
+    print("AUTONOMOUS VEHICLE TESTING SYSTEM v2.1")
     print("="*60)
     print("\nStudent: Benyamin Mahamed (W1966430)")
     print("Project: Autonomous Self-Driving Car for Assisted Mobility")
-    print("Target User: Jonathan (77) - Wheelchair User")
+    print("Target:  Jonathan (77) — Wheelchair User")
     print("="*60 + "\n")
-    
-    # START WITH BOTH AS NONE: This keeps the terminal responsive and the GPIO pins free
-    vehicle_sim = None
+
+    vehicle_sim  = None
     vehicle_live = None
-    
+
     while True:
-        # Flush the buffer to ensure the terminal is ready for fresh input
         if sys.stdin.isatty():
             try:
                 import termios
@@ -943,61 +923,63 @@ def main():
 
         print_menu()
         choice = input("Select test (1-5): ").strip()
-        
+
         if not choice:
             continue
 
         if choice == '1':
-            print("\n[INFO] Initializing hardware interface...")
-            # If sim was running, kill it first
+            print("\n[INFO] Initialising hardware interface...")
             if vehicle_sim is not None:
                 vehicle_sim = None
                 time.sleep(0.2)
             if vehicle_live is None:
-                vehicle_live = AutonomousVehicle(simulation_mode=False, enable_logging=True)
+                vehicle_live = AutonomousVehicle(
+                    simulation_mode=False, enable_logging=True
+                )
             vehicle_live.run_heartbeat_test()
-            
-        elif choice == '2' or choice == '3':
-            # Initialize SIM mode ONLY when Choice 2 or 3 is selected
+
+        elif choice in ('2', '3'):
             if vehicle_sim is None:
-                print("\n[INFO] Initializing simulation subsystems...")
-                vehicle_sim = AutonomousVehicle(simulation_mode=True, enable_logging=True)
-            
+                print("\n[INFO] Initialising simulation subsystems...")
+                vehicle_sim = AutonomousVehicle(
+                    simulation_mode=True, enable_logging=True
+                )
             if choice == '2':
                 vehicle_sim.run_vision_test()
             else:
                 vehicle_sim.run_integration_test()
-            
+
         elif choice == '4':
             print("\n" + "="*60)
-            print("⚠ WARNING: LIVE MOTOR MODE")
+            print("⚠  WARNING: LIVE MOTOR MODE")
             print("="*60)
             print("\nRequirements:")
-            print("  - Vehicle must be on track with clear lane markings")
-            print("  - Clear path ahead (no obstacles)")
-            print("  - Emergency stop accessible (ESC key)")
-            print("  - Adequate lighting for camera")
-            print("\nSafety:")
-            print("  - Press ESC for immediate emergency stop")
-            print("  - Press 'o' to activate manual override")
-            print("  - Press 'q' to quit safely")
-            
+            print("  - Vehicle on track with clear lane markings")
+            print("  - Clear path ahead")
+            print("  - Emergency stop accessible (ESC)")
+            print("  - Adequate lighting")
+            print("\nSafety controls:")
+            print("  ESC — immediate emergency stop")
+            print("  'o' — toggle manual override (terminal — no X11 focus needed)")
+            print("  'q' — quit safely")
+
             confirm = input("\nType 'CONFIRM' to proceed: ").strip()
-            
+
             if confirm == 'CONFIRM':
-                # KILL SIMULATION FIRST: This releases GPIO23
                 if vehicle_sim is not None:
                     print("\n[INFO] Releasing simulation hardware resources...")
-                    vehicle_sim = None 
-                    time.sleep(0.5) # Allow hardware bus to settle
-                
-                print("[INFO] Initializing hardware interface...")
+                    vehicle_sim = None
+                    time.sleep(0.5)
+
+                print("[INFO] Initialising hardware interface...")
                 if vehicle_live is None:
-                    vehicle_live = AutonomousVehicle(simulation_mode=False, enable_logging=True)
+                    vehicle_live = AutonomousVehicle(
+                        simulation_mode=False, enable_logging=True
+                    )
                 vehicle_live.run_integration_test()
             else:
                 print("\n[ABORTED] Live motor test cancelled")
-                
+
         elif choice == '5':
             print("\n" + "="*60)
             print("SHUTTING DOWN")
@@ -1005,9 +987,10 @@ def main():
             if vehicle_live and vehicle_live.motor_control:
                 vehicle_live.motor_control.emergency_stop()
             break
-            
+
         else:
             print(f"\n[ERROR] Invalid choice '{choice}'. Please select 1-5.")
+
 
 if __name__ == "__main__":
     try:
