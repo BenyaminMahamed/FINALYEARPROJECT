@@ -166,8 +166,8 @@ class SystemConfig:
         """
         return {
             "performance": {
-                "latency_target_ms": 200,  # NFR-P1
-                "min_fps": 8                # NFR-P2
+                "latency_target_ms": 200,
+                "min_fps": 8
             },
             "camera": {
                 "width": 640,
@@ -182,9 +182,10 @@ class SystemConfig:
                 "canny_high": 150,
                 "hough_rho": 2,
                 "hough_theta": 1,
-                "hough_threshold": 50,
-                "hough_min_line_length": 40,
-                "hough_max_line_gap": 20,
+                # --- CHANGE 1: More sensitive Hough ---
+                "hough_threshold": 20,           # Was 50 (Lower = finds more lines)
+                "hough_min_line_length": 15,     # Was 40 (Allows shorter lane segments)
+                "hough_max_line_gap": 50,        # Was 20 (Joins broken lines better)
                 "min_lane_slope": 0.3,
                 "max_lane_slope": 3.0
             },
@@ -192,7 +193,8 @@ class SystemConfig:
                 "safety_zone_width_ratio": 0.4,
                 "safety_zone_height_ratio": 0.5,
                 "threshold_value": 60,
-                "min_blob_area_percent": 0.15
+                # --- CHANGE 2: Higher area threshold ---
+                "min_blob_area_percent": 0.8     # Was 0.15 (Higher = ignores floor noise)
             },
             "control": {
                 "base_speed": 30,
@@ -200,7 +202,10 @@ class SystemConfig:
                 "min_speed": 10,
                 "max_steer_angle": 30,
                 "steer_smoothing": 0.3,
-                "steer_kp": 0.5
+                # --- CHANGE 3: Lower KP for smoother turns ---
+                "steer_kp": 0.3                  # Was 0.5 (Lower = less "twitchy")
+            },
+            # ... (keep rest of the code the same)
             },
             "data_fusion": {
                 "obstacle_priority": True,
