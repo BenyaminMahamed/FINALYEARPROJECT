@@ -156,13 +156,10 @@ class SystemConfig:
         self.SHOW_SAFETY_ZONE = debug.get('show_safety_zone', True)
         self.SAVE_DEBUG_FRAMES = debug.get('save_frames', False)
     
-    @staticmethod
+@staticmethod
     def _get_default_settings() -> Dict[str, Any]:
         """
         Get default configuration settings.
-        
-        Returns:
-            Dictionary of default configuration values
         """
         return {
             "performance": {
@@ -175,17 +172,16 @@ class SystemConfig:
                 "fps": 30
             },
             "lane_detection": {
-                "roi_top_ratio": 0.55,
+                "roi_top_ratio": 0.65,      # Adjusted to look closer at floor
                 "roi_bottom_ratio": 1.0,
                 "blur_kernel_size": 5,
                 "canny_low": 50,
                 "canny_high": 150,
                 "hough_rho": 2,
                 "hough_theta": 1,
-                # --- CHANGE 1: More sensitive Hough ---
-                "hough_threshold": 20,           # Was 50 (Lower = finds more lines)
-                "hough_min_line_length": 15,     # Was 40 (Allows shorter lane segments)
-                "hough_max_line_gap": 50,        # Was 20 (Joins broken lines better)
+                "hough_threshold": 20,      # Optimized sensitive Hough
+                "hough_min_line_length": 15,
+                "hough_max_line_gap": 50,
                 "min_lane_slope": 0.3,
                 "max_lane_slope": 3.0
             },
@@ -193,8 +189,7 @@ class SystemConfig:
                 "safety_zone_width_ratio": 0.4,
                 "safety_zone_height_ratio": 0.5,
                 "threshold_value": 60,
-                # --- CHANGE 2: Higher area threshold ---
-                "min_blob_area_percent": 0.8     # Was 0.15 (Higher = ignores floor noise)
+                "min_blob_area_percent": 0.8 # Ignores floor noise
             },
             "control": {
                 "base_speed": 30,
@@ -202,10 +197,7 @@ class SystemConfig:
                 "min_speed": 10,
                 "max_steer_angle": 30,
                 "steer_smoothing": 0.3,
-                # --- CHANGE 3: Lower KP for smoother turns ---
-                "steer_kp": 0.3                  # Was 0.5 (Lower = less "twitchy")
-            },
-            # ... (keep rest of the code the same)
+                "steer_kp": 0.3              # Smoother assisted steering
             },
             "data_fusion": {
                 "obstacle_priority": True,
