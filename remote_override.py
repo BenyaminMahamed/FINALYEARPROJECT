@@ -45,19 +45,19 @@ class RemoteOverride:
     DEFAULT_SPEED = 30
     MAX_STEERING_ANGLE = 30
     
-    def __init__(self):
+def __init__(self, picarx_instance: Optional[Picarx] = None):
         """
         Initialize remote override system.
-        
-        Creates Picarx interface and sets initial safe state.
-        
-        Raises:
-            Exception: If PiCar-X hardware initialization fails
         """
         try:
             print("[OVERRIDE] Initializing remote override system...")
-            self.px = Picarx()
-            print("[OVERRIDE] ✓ Hardware interface ready")
+            # If an instance is provided, use it. Otherwise, create a new one.
+            if picarx_instance:
+                self.px = picarx_instance
+                print("[OVERRIDE] ✓ Using shared hardware interface")
+            else:
+                self.px = Picarx()
+                print("[OVERRIDE] ✓ New hardware interface created")
         except Exception as e:
             print(f"[OVERRIDE] ✗ Failed to initialize: {e}")
             raise
