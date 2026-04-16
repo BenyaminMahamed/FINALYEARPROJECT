@@ -314,70 +314,51 @@ class LaneDetector:
     def _calculate_steering(self, left_lane: Optional[Tuple], 
                            right_lane: Optional[Tuple],
                            frame_shape: Tuple[int, int, int]) -> Tuple[int, int, float, str]:
-        """
-        Calculate steering angle and lane offset from detected lanes.
-        
-        Implements proportional control: steering proportional to lateral offset.
-        Confidence scoring based on detection quality (both lanes > one lane > none).
-        
-        Args:
-            left_lane: Left lane line coordinates or None
-            right_lane: Right lane line coordinates or None
-            frame_shape: Frame dimensions
-            
-        Returns:
-            Tuple of (steering_angle, lane_offset, confidence, lanes_detected)
-                - steering_angle (int): Degrees (-MAX to +MAX)
-                - lane_offset (int): Pixels from center
-                - confidence (float): 0.0-1.0
-                - lanes_detected (str): 'both', 'left', 'right', or 'none'
-        """
         height, width = frame_shape[:2]
+        frame_center = width // 2
         
-        # Defaults: go straight, no confidence
+        # Defaults
         steering_angle = 0
         lane_offset = 0
         confidence = 0.0
         lanes_detected = 'none'
         
-        # Calculate lane center based on detected lanes
+        # 1. Calculate lane center with smarter estimation for single lanes
         if left_lane is not None and right_lane is not None:
-            # Both lanes detected - highest confidence
-            left_x = left_lane[2]  # Bottom x coordinate
+            # Both lanes: Optimal tracking
+            left_x = left_lane[2]  # Bottom x
             right_x = right_lane[2]
             lane_center = (left_x + right_x) // 2
             confidence = 1.0
             lanes_detected = 'both'
             
         elif left_lane is not None:
-            # Only left lane - medium confidence
+            # Only left: Use a tighter estimate (20% of width instead of 25%)
+            # This prevents the car from diving too hard to the right
             left_x = left_lane[2]
-            # Estimate right lane position (assume standard lane width)
-            lane_center = left_x + (width // 4)
-            confidence = 0.6
+            lane_center = left_x + int(width * 0.20) 
+            confidence = 0.4  # Lower confidence forces MIN_SPEED in main.py
             lanes_detected = 'left'
             
         elif right_lane is not None:
-            # Only right lane - medium confidence
+            # Only right: Use a tighter estimate
             right_x = right_lane[2]
-            # Estimate left lane position
-            lane_center = right_x - (width // 4)
-            confidence = 0.6
+            lane_center = right_x - int(width * 0.20)
+            confidence = 0.4
             lanes_detected = 'right'
+            
         else:
-            # No lanes detected - return defaults
-            return steering_angle, lane_offset, confidence, lanes_detected
+            return 0, 0, 0.0, 'none'
         
-        # Calculate offset from frame center
-        frame_center = width // 2
+        # 2. Calculate offset
         lane_offset = lane_center - frame_center
         
-        # Convert offset to steering angle (proportional control)
-        # Negative offset = lane center is left → turn left (negative angle)
-        # Positive offset = lane center is right → turn right (positive angle)
+        # 3. Proportional Control
+        # Note: The '-1' here combined with the '* -1' in main.py 
+        # might cancel out. Ensure your physical wheel test is the final judge.
         steering_angle = -int(lane_offset * config.STEER_KP)
         
-        # Apply steering limits
+        # 4. Apply safety limits
         steering_angle = max(-config.MAX_STEER_ANGLE, 
                            min(config.MAX_STEER_ANGLE, steering_angle))
         
