@@ -93,7 +93,7 @@ class RemoteOverride:
         """Check if override is currently active."""
         return self.override_active
 
-def process_manual_command(self, command: str):
+    def process_manual_command(self, command: str):
         """Process manual control command (FR3.3)."""
         if not self.override_active:
             return
@@ -101,20 +101,18 @@ def process_manual_command(self, command: str):
         self.command_count += 1
         
         if command == 'forward':
-            # If backward() was making it go back, use forward()
+            # Hardware mapping correction
             self.px.forward(self.speed) 
             
         elif command == 'backward':
-            # If forward() was making it go back, use backward()
             self.px.backward(self.speed)
             
         elif command == 'left':
-            # Flip the sign: if -30 went right, use +30
+            # Flip sign for physical steering calibration
             self.steering = self.MAX_STEERING_ANGLE 
             self.px.set_dir_servo_angle(self.steering)
             
         elif command == 'right':
-            # Flip the sign: if +30 went right, use -30
             self.steering = -self.MAX_STEERING_ANGLE
             self.px.set_dir_servo_angle(self.steering)
             
@@ -144,12 +142,6 @@ def process_manual_command(self, command: str):
 class ManualControl:
     """
     Standalone manual control interface for testing.
-    
-    Provides interactive keyboard control for validating:
-        - FR3.1: Manual override activation
-        - FR3.3: WASD manual control
-        - NFR-S2: Emergency stop reliability
-        - NFR-U1: Override response time
     """
     
     def __init__(self):
@@ -160,12 +152,7 @@ class ManualControl:
         self.running = True
     
     def get_key(self) -> str:
-        """
-        Get single keypress without requiring Enter.
-        
-        Returns:
-            Single character key press
-        """
+        """Get single keypress without requiring Enter."""
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:
@@ -187,25 +174,16 @@ class ManualControl:
         print("  A - Left")
         print("  D - Right")
         print("  SPACE - Stop")
-        print("  + / - - Speed adjustment")
         print("  ESC - Emergency stop (NFR-S2)")
         print("  Q - Quit")
         print("="*60 + "\n")
-        print("[READY] Manual override active - awaiting commands...\n")
     
     def run(self):
-        """
-        Run manual control loop for testing.
-        
-        Validates manual control subsystem functionality.
-        """
+        """Run manual control loop."""
         self.display_instructions()
-        
         try:
             while self.running:
                 key = self.get_key().lower()
-                
-                # Motion controls
                 if key == 'w':
                     self.override.process_manual_command('forward')
                 elif key == 's':
@@ -214,34 +192,17 @@ class ManualControl:
                     self.override.process_manual_command('left')
                 elif key == 'd':
                     self.override.process_manual_command('right')
-                    
-                # Stop
                 elif key == ' ':
                     self.override.process_manual_command('stop')
-                    
-                # Speed controls
-                elif key == '+' or key == '=':
-                    self.override.process_manual_command('speed_up')
-                elif key == '-' or key == '_':
-                    self.override.process_manual_command('speed_down')
-                    
-                # Emergency stop
                 elif key == '\x1b':  # ESC key
                     self.override.emergency_stop()
-                    
-                # Quit
                 elif key == 'q':
                     print("\n[QUIT] Shutting down manual control...")
                     self.running = False
-                    
         except KeyboardInterrupt:
             print("\n\n[INTERRUPT] Keyboard interrupt detected")
-            
         except Exception as e:
             print(f"\n[ERROR] Manual control exception: {e}")
-            import traceback
-            traceback.print_exc()
-            
         finally:
             self._cleanup()
     
@@ -249,34 +210,17 @@ class ManualControl:
         """Safe shutdown with statistics"""
         print("\n[CLEANUP] Executing emergency stop...")
         self.override.emergency_stop()
-        
-        # Print statistics
         self.override.print_statistics()
-        
-        print("[CLEANUP] ✓ Complete - Vehicle in safe state")
-        print("Goodbye!\n")
-
+        print("[CLEANUP] ✓ Complete")
 
 def main():
-    """
-    Entry point for standalone manual control testing.
-    
-    Used for validating FR3.1, FR3.3, NFR-S2, and NFR-U1 requirements.
-    """
-    print("\n" + "="*60)
-    print("REMOTE OVERRIDE SYSTEM - Standalone Test")
-    print("Autonomous Self-Driving Car for Assisted Mobility")
-    print("="*60)
-    
+    """Entry point for standalone manual control testing."""
     try:
         controller = ManualControl()
         controller.run()
     except Exception as e:
         print(f"\n[FATAL ERROR] {e}")
-        import traceback
-        traceback.print_exc()
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()
