@@ -156,7 +156,7 @@ class SystemConfig:
         self.SHOW_SAFETY_ZONE = debug.get('show_safety_zone', True)
         self.SAVE_DEBUG_FRAMES = debug.get('save_frames', False)
     
-@staticmethod
+    @staticmethod
     def _get_default_settings() -> Dict[str, Any]:
         """
         Get default configuration settings.
