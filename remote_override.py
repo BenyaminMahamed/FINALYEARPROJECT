@@ -78,7 +78,7 @@ def __init__(self, picarx_instance=None):
         
         print("[OVERRIDE] Remote override system initialized")
 
- def set_event_callback(self, callback):
+    def set_event_callback(self, callback):
         """
         Set callback function for event logging.
         
