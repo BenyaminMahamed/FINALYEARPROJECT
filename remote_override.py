@@ -93,22 +93,31 @@ class RemoteOverride:
         """Check if override is currently active."""
         return self.override_active
 
-    def process_manual_command(self, command: str):
+def process_manual_command(self, command: str):
         """Process manual control command (FR3.3)."""
         if not self.override_active:
             return
         
         self.command_count += 1
+        
         if command == 'forward':
-            self.px.backward(self.speed)
+            # If backward() was making it go back, use forward()
+            self.px.forward(self.speed) 
+            
         elif command == 'backward':
-            self.px.forward(self.speed)
+            # If forward() was making it go back, use backward()
+            self.px.backward(self.speed)
+            
         elif command == 'left':
+            # Flip the sign: if -30 went right, use +30
+            self.steering = self.MAX_STEERING_ANGLE 
+            self.px.set_dir_servo_angle(self.steering)
+            
+        elif command == 'right':
+            # Flip the sign: if +30 went right, use -30
             self.steering = -self.MAX_STEERING_ANGLE
             self.px.set_dir_servo_angle(self.steering)
-        elif command == 'right':
-            self.steering = self.MAX_STEERING_ANGLE
-            self.px.set_dir_servo_angle(self.steering)
+            
         elif command == 'stop':
             self.px.stop()
             self.px.set_dir_servo_angle(0)
