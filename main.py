@@ -753,6 +753,7 @@ def run_integration_test(self):
             self.obstacle_detector.print_statistics()
             self.remote_override.print_statistics()
             if self.logger: self.logger.save_summary()
+                
     def _create_full_display(self, frame: np.ndarray,
                             lane_result: Dict, obstacle_result: Dict,
                             mode: str, fps: float, latency_ms: float) -> np.ndarray:
