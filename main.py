@@ -572,7 +572,7 @@ class AutonomousVehicle:
                 self.logger.save_summary()
     
 
-def run_integration_test(self):
+    def run_integration_test(self):
         """
         Full Integration Test with ALL safety features.
         Fixed directional logic: Aligned CV coordinates with physical actuators.
