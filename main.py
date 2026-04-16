@@ -282,48 +282,49 @@ class Camera:
 class AutonomousVehicle:
     """
     Main system integrating vision, obstacle detection, and control.
-    
-    Implements safety-first architecture for assisted mobility applications
-    with mandatory manual override and dual emergency stop mechanisms.
-    
-    Safety Priority Hierarchy:
-        1. Manual Override (FR3.1) - HIGHEST
-        2. Obstacle Detection (FR2.2, NFR-S1)
-        3. Autonomous Navigation (FR1.1)
-        4. Stopped State - LOWEST
+    Shared hardware architecture to prevent GPIO pin conflicts.
     """
     
     def __init__(self, simulation_mode: bool = False, enable_logging: bool = True):
         """
         Initialize autonomous vehicle system.
-        
-        Args:
-            simulation_mode: If True, processes vision but doesn't send motor commands
-            enable_logging: If True, enables comprehensive data logging
         """
         self.simulation_mode = simulation_mode
         self.enable_logging = enable_logging
         
-        # Initialize subsystems
+        # 1. SHARED HARDWARE INITIALIZATION
+        # We create the hardware brain ONCE here to be shared by all subsystems.
+        self.shared_px = None
+        if not self.simulation_mode:
+            try:
+                from picarx import Picarx
+                self.shared_px = Picarx()
+                print("[INIT] ✓ Shared hardware interface (Picarx) ready")
+            except Exception as e:
+                print(f"[INIT] ✗ Hardware initialization failed: {e}")
+                self.shared_px = None
+
+        # 2. SUBSYSTEM INITIALIZATION
         print("[INIT] Initializing subsystems...")
         self.lane_detector = LaneDetector()
         self.obstacle_detector = ObstacleDetector()
-        self.remote_override = RemoteOverride()
+        
+        # Pass the shared hardware instance to RemoteOverride
+        self.remote_override = RemoteOverride(picarx_instance=self.shared_px)
         
         # Initialize logger if enabled
         if self.enable_logging:
             self.logger = PerformanceLogger()
-            
-            # Connect loggers to subsystems
             self.lane_detector.set_event_callback(self.logger.log_event)
             self.obstacle_detector.set_event_callback(self.logger.log_event)
             self.remote_override.set_event_callback(self.logger.log_event)
         else:
             self.logger = None
         
-        # Initialize motor control (only if not simulation)
+        # 3. MOTOR CONTROL INITIALIZATION
         if not simulation_mode:
-            self.motor_control = RobotMuscle()
+            # Pass the same shared hardware instance to RobotMuscle
+            self.motor_control = RobotMuscle(picarx_instance=self.shared_px)
             if self.logger:
                 self.motor_control.set_event_callback(self.logger.log_event)
             print("[INIT] ✓ Full system initialized - MOTORS ACTIVE")
