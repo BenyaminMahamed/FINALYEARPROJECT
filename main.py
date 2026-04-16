@@ -653,25 +653,29 @@ class AutonomousVehicle:
                         print(f"[SAFETY] Obstacle at {obstacle_result['distance_estimate']}cm - STOPPING")
                     
                 elif self.autonomous_active:
+                    # PRIORITY 3: AUTONOMOUS MODE - lane following
                     mode = "AUTONOMOUS"
                     
-                    # --- CALIBRATION FIX: STEERING INVERSION ---
-                    steering_angle = lane_result['steering_angle'] * -1
+                    # --- CALIBRATION FIX: STEERING ---
+                    # Removed the * -1 because the car was steering Right when it should go Left.
+                    steering_angle = lane_result['steering_angle']
                     
+                    # Speed based on lane confidence
                     if lane_result['confidence'] > 0.5:
                         speed = config.BASE_SPEED
                     elif lane_result['confidence'] > 0.3:
                         speed = config.MIN_SPEED
                     else:
-                        speed = 0 
+                        speed = 0  # Safety stop
                     
                     if not self.simulation_mode:
-                        # --- CALIBRATION FIX: MOTOR POLARITY ---
-                        self.motor_control.px.forward(speed)
+                        # --- CALIBRATION FIX: MOTORS ---
+                        # Use .backward() to physically move the PiCar-X forward.
+                        self.motor_control.px.backward(speed)
                         self.motor_control.px.set_dir_servo_angle(steering_angle)
                     else:
                         if frame_count % 15 == 0:
-                            print(f"[AUTO] Speed: {speed:3d} | Steer: {steering_angle:+4d}deg | Conf: {lane_result['confidence']:.2f}")
+                            print(f"[AUTO] Speed: {speed:3d} | Steer: {steering_angle:+4d}deg")
                 else:
                     mode = "STOPPED"
                     speed = 0
