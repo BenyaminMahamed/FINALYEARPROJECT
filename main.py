@@ -996,7 +996,7 @@ def main():
     print("Target User: Jonathan (77) - Wheelchair User")
     print("="*60 + "\n")
     
-    # Start with both as None to keep GPIO pins free
+    # START WITH BOTH AS NONE: This keeps the terminal responsive and the GPIO pins free
     vehicle_sim = None
     vehicle_live = None
     
@@ -1017,11 +1017,10 @@ def main():
 
         if choice == '1':
             print("\n[INFO] Initializing hardware interface...")
-            # Release sim instance if it exists
+            # If sim was running, kill it first
             if vehicle_sim is not None:
                 vehicle_sim = None
                 time.sleep(0.2)
-
             if vehicle_live is None:
                 vehicle_live = AutonomousVehicle(simulation_mode=False, enable_logging=True)
             vehicle_live.run_heartbeat_test()
@@ -1054,7 +1053,7 @@ def main():
             confirm = input("\nType 'CONFIRM' to proceed: ").strip()
             
             if confirm == 'CONFIRM':
-                # CRITICAL: Destroy the simulation instance to release GPIO23
+                # KILL SIMULATION FIRST: This releases GPIO23
                 if vehicle_sim is not None:
                     print("\n[INFO] Releasing simulation hardware resources...")
                     vehicle_sim = None 
