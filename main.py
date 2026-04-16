@@ -653,29 +653,28 @@ class AutonomousVehicle:
                         print(f"[SAFETY] Obstacle at {obstacle_result['distance_estimate']}cm - STOPPING")
                     
                 elif self.autonomous_active:
-                    # PRIORITY 3: AUTONOMOUS MODE - lane following
                     mode = "AUTONOMOUS"
                     
-                    # --- CALIBRATION FIX: STEERING ---
-                    # Removed the * -1 because the car was steering Right when it should go Left.
-                    steering_angle = lane_result['steering_angle']
+                    # 1. GET THE ANGLE (Multiply by -1 to fix the veer)
+                    raw_steering = lane_result.get('steering_angle', 0)
+                    steering_angle = raw_steering * -1
                     
-                    # Speed based on lane confidence
+                    # 2. SET THE SPEED
                     if lane_result['confidence'] > 0.5:
                         speed = config.BASE_SPEED
-                    elif lane_result['confidence'] > 0.3:
+                    elif lane_result['confidence'] > 0.2: # Lowered threshold to keep it moving
                         speed = config.MIN_SPEED
                     else:
-                        speed = 0  # Safety stop
+                        speed = 0  
                     
+                    # 3. COMMAND THE HARDWARE IMMEDIATELY
                     if not self.simulation_mode:
-                        # --- CALIBRATION FIX: MOTORS ---
-                        # Use .backward() to physically move the PiCar-X forward.
+                        # Force update every single frame
                         self.motor_control.px.backward(speed)
                         self.motor_control.px.set_dir_servo_angle(steering_angle)
-                    else:
-                        if frame_count % 15 == 0:
-                            print(f"[AUTO] Speed: {speed:3d} | Steer: {steering_angle:+4d}deg")
+                        
+                        # Print every frame for this test to see if it's changing
+                        print(f"ACTUAL COMMAND -> Steer: {steering_angle} | Conf: {lane_result['confidence']:.2f}")
                 else:
                     mode = "STOPPED"
                     speed = 0
