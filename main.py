@@ -1019,7 +1019,7 @@ def main():
             # Integration in simulation mode
             vehicle_sim.run_integration_test()
             
-        elif choice == '4':
+elif choice == '4':
             # Full system with motors
             print("\n" + "="*60)
             print("⚠ WARNING: LIVE MOTOR MODE")
@@ -1034,10 +1034,20 @@ def main():
             print("  - Press 'o' to activate manual override")
             print("  - Press 'q' to quit safely")
             
-            confirm = input("\nType 'CONFIRM' to proceed: ")
+            # Flush the buffer to ensure the terminal is ready for input
+            if sys.stdin.isatty():
+                import termios
+                termios.tcflush(sys.stdin, termios.TCIFLUSH)
+            
+            confirm = input("\nType 'CONFIRM' to proceed: ").strip()
             
             if confirm == 'CONFIRM':
-                print("\n[INFO] Initializing hardware interface...")
+                # CRITICAL: Destroy the simulation instance to release GPIO23
+                if vehicle_sim is not None:
+                    print("\n[INFO] Releasing simulation hardware resources...")
+                    vehicle_sim = None 
+                
+                print("[INFO] Initializing hardware interface...")
                 if vehicle_live is None:
                     vehicle_live = AutonomousVehicle(simulation_mode=False, enable_logging=True)
                 vehicle_live.run_integration_test()
