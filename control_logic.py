@@ -39,22 +39,32 @@ class RobotMuscle:
         - Emergency stop counting (reliability validation)
         - Mode transition safety (always stops when changing modes)
     """
-    
-    def __init__(self):
+    def __init__(self, picarx_instance=None):
         """
         Initialize motor control interface.
         
-        Raises:
-            Exception: If PiCar-X hardware initialization fails
+        Args:
+            picarx_instance: Existing Picarx hardware instance to share
         """
         try:
             print("[MUSCLE] Initializing motor control system...")
-            self.px = Picarx()
+            
+            # SHARED HARDWARE LOGIC: 
+            # Use the passed instance if it exists, otherwise create a new one.
+            if picarx_instance:
+                self.px = picarx_instance
+                print("[MUSCLE] ✓ Using shared hardware interface")
+            else:
+                from picarx import Picarx
+                self.px = Picarx()
+                print("[MUSCLE] ✓ New hardware interface created")
+                
             print("[MUSCLE] ✓ Hardware interface ready")
+            
         except Exception as e:
             print(f"[MUSCLE] ✗ Failed to initialize: {e}")
             raise
-        
+   
         # State tracking
         self.is_autonomous = False
         self.current_speed = 0
