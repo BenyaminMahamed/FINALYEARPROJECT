@@ -645,36 +645,41 @@ class AutonomousVehicle:
                     speed = 0  
                     
                 elif obstacle_result['obstacle_detected']:
+                    # PRIORITY 2: SAFETY - Obstacle detected!
                     mode = "OBSTACLE STOP"
                     speed = 0
                     if not self.simulation_mode:
                         self.motor_control.emergency_stop()
-                    if frame_count % 30 == 0:
-                        print(f"[SAFETY] Obstacle at {obstacle_result['distance_estimate']}cm - STOPPING")
+                    # Change: Log the distance to see why it's stopping
+                    if frame_count % 10 == 0: 
+                        print(f"[SAFETY] STOP: Obstacle at {obstacle_result['distance_estimate']}cm")
                     
                 elif self.autonomous_active:
+                    # PRIORITY 3: AUTONOMOUS MODE - lane following
                     mode = "AUTONOMOUS"
                     
-                    # 1. GET THE ANGLE (Multiply by -1 to fix the veer)
+                    # --- STEERING CALIBRATION & DAMPENING ---
+                    # 1. Multiply by -1 to fix the inverted steering
+                    # 2. Multiply by 0.7 to dampen the turn (prevents "turning out")
                     raw_steering = lane_result.get('steering_angle', 0)
-                    steering_angle = raw_steering * -1
+                    steering_angle = (raw_steering * -1) * 0.7
                     
                     # 2. SET THE SPEED
                     if lane_result['confidence'] > 0.5:
                         speed = config.BASE_SPEED
-                    elif lane_result['confidence'] > 0.2: # Lowered threshold to keep it moving
+                    elif lane_result['confidence'] > 0.2:
                         speed = config.MIN_SPEED
                     else:
-                        speed = 0  
+                        speed = 0  # Safety stop if line is lost
                     
-                    # 3. COMMAND THE HARDWARE IMMEDIATELY
+                    # 3. COMMAND THE HARDWARE
                     if not self.simulation_mode:
-                        # Force update every single frame
                         self.motor_control.px.backward(speed)
                         self.motor_control.px.set_dir_servo_angle(steering_angle)
                         
-                        # Print every frame for this test to see if it's changing
-                        print(f"ACTUAL COMMAND -> Steer: {steering_angle} | Conf: {lane_result['confidence']:.2f}")
+                        # Monitor the logic live
+                        if frame_count % 5 == 0:
+                            print(f"AUTO -> Steer: {steering_angle:.1f} | Conf: {lane_result['confidence']:.2f}")
                 else:
                     mode = "STOPPED"
                     speed = 0
