@@ -45,7 +45,7 @@ class RemoteOverride:
     DEFAULT_SPEED = 30
     MAX_STEERING_ANGLE = 30
     
-def __init__(self, picarx_instance: Optional[Picarx] = None):
+def __init__(self, picarx_instance=None):
         """
         Initialize remote override system.
         """
@@ -77,8 +77,8 @@ def __init__(self, picarx_instance: Optional[Picarx] = None):
         self.event_callback = None
         
         print("[OVERRIDE] Remote override system initialized")
-    
-    def set_event_callback(self, callback):
+
+ def set_event_callback(self, callback):
         """
         Set callback function for event logging.
         
