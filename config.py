@@ -66,18 +66,18 @@ class SystemConfig:
 
         # === LANE DETECTION ===
         lane = settings.get('lane_detection', {})
-        self.ROI_TOP_RATIO    = lane.get('roi_top_ratio', 0.60)
+        self.ROI_TOP_RATIO    = lane.get('roi_top_ratio', 0.35)        # FIX: was 0.60
         self.ROI_BOTTOM_RATIO = lane.get('roi_bottom_ratio', 1.0)
         self.BLUR_KERNEL_SIZE = lane.get('blur_kernel_size', 5)
         self.CANNY_LOW_THRESHOLD  = lane.get('canny_low', 50)
         self.CANNY_HIGH_THRESHOLD = lane.get('canny_high', 150)
         self.HOUGH_RHO             = lane.get('hough_rho', 2)
         self.HOUGH_THETA           = lane.get('hough_theta', 1)
-        self.HOUGH_THRESHOLD       = lane.get('hough_threshold', 25) 
-        self.HOUGH_MIN_LINE_LENGTH = lane.get('hough_min_line_length', 20) 
+        self.HOUGH_THRESHOLD       = lane.get('hough_threshold', 25)
+        self.HOUGH_MIN_LINE_LENGTH = lane.get('hough_min_line_length', 20)
         self.HOUGH_MAX_LINE_GAP    = lane.get('hough_max_line_gap', 50)
-        self.MIN_LANE_SLOPE        = lane.get('min_lane_slope', 0.3)
-        self.MAX_LANE_SLOPE        = lane.get('max_lane_slope', 3.0)
+        self.MIN_LANE_SLOPE        = lane.get('min_lane_slope', 0.5)   # FIX: was 0.3
+        self.MAX_LANE_SLOPE        = lane.get('max_lane_slope', 2.0)   # FIX: was 3.0
 
         # === OBSTACLE DETECTION ===
         obstacle = settings.get('obstacle_detection', {})
@@ -88,12 +88,12 @@ class SystemConfig:
 
         # === MOTOR CONTROL ===
         control = settings.get('control', {})
-        self.BASE_SPEED = control.get('base_speed', 20) 
+        self.BASE_SPEED = control.get('base_speed', 10)                # FIX: was 20
         self.MAX_SPEED  = control.get('max_speed', 100)
         self.MIN_SPEED  = control.get('min_speed', 10)
         self.MAX_STEER_ANGLE  = control.get('max_steer_angle', 25)
-        self.STEER_SMOOTHING  = control.get('steer_smoothing', 0.5)
-        self.STEER_KP         = control.get('steer_kp', 0.30)   
+        self.STEER_SMOOTHING  = control.get('steer_smoothing', 0.75)   # FIX: was 0.5
+        self.STEER_KP         = control.get('steer_kp', 0.85)          # FIX: was 0.30
         self.STEER_TRIM       = control.get('steer_trim', 0)
 
         # === LOGGING & DEBUG ===
@@ -124,18 +124,28 @@ class SystemConfig:
             "performance": {"latency_target_ms": 200, "min_fps": 8},
             "camera": {"width": 640, "height": 480, "fps": 30},
             "lane_detection": {
-                "roi_top_ratio": 0.60, "roi_bottom_ratio": 1.0, "blur_kernel_size": 5,
-                "canny_low": 50, "canny_high": 150, "hough_rho": 2, "hough_theta": 1,
-                "hough_threshold": 25, "hough_min_line_length": 20, "hough_max_line_gap": 50,
-                "min_lane_slope": 0.3, "max_lane_slope": 3.0
+                "roi_top_ratio": 0.35,          # FIX: was 0.60
+                "roi_bottom_ratio": 1.0,
+                "blur_kernel_size": 5,
+                "canny_low": 50, "canny_high": 150,
+                "hough_rho": 2, "hough_theta": 1,
+                "hough_threshold": 25,
+                "hough_min_line_length": 20,
+                "hough_max_line_gap": 50,
+                "min_lane_slope": 0.5,          # FIX: was 0.3
+                "max_lane_slope": 2.0           # FIX: was 3.0
             },
             "obstacle_detection": {
                 "safety_zone_width_ratio": 0.4, "safety_zone_height_ratio": 0.5,
                 "threshold_value": 60, "min_blob_area_percent": 0.8
             },
             "control": {
-                "base_speed": 20, "max_speed": 100, "min_speed": 10,
-                "max_steer_angle": 25, "steer_smoothing": 0.5, "steer_kp": 0.30, "steer_trim": 0
+                "base_speed": 10,               # FIX: was 20
+                "max_speed": 100, "min_speed": 10,
+                "max_steer_angle": 25,
+                "steer_smoothing": 0.75,        # FIX: was 0.5
+                "steer_kp": 0.85,               # FIX: was 0.30
+                "steer_trim": 0
             },
             "data_fusion": {"obstacle_priority": True, "mode": "priority"},
             "remote_override": {"enabled": True, "timeout_ms": 50},
@@ -144,7 +154,7 @@ class SystemConfig:
         }
 
     def export_to_json(self, filename: str = "settings_export.json"):
-        settings = self._get_default_settings() 
+        settings = self._get_default_settings()
         with open(filename, 'w') as f:
             json.dump(settings, f, indent=2)
         print(f"[CONFIG] Configuration exported to {filename}")
@@ -187,7 +197,6 @@ HOUGH_MAX_LINE_GAP    = config.HOUGH_MAX_LINE_GAP
 MIN_LANE_SLOPE        = config.MIN_LANE_SLOPE
 MAX_LANE_SLOPE        = config.MAX_LANE_SLOPE
 
-# --- THESE WERE MISSING PREVIOUSLY ---
 SAFETY_ZONE_WIDTH_RATIO    = config.SAFETY_ZONE_WIDTH_RATIO
 SAFETY_ZONE_HEIGHT_RATIO   = config.SAFETY_ZONE_HEIGHT_RATIO
 OBSTACLE_THRESHOLD_VALUE   = config.OBSTACLE_THRESHOLD_VALUE
