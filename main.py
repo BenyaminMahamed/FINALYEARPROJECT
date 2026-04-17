@@ -308,14 +308,42 @@ class AutonomousVehicle:
             print("[INIT] ✓ Simulation mode — motors disabled")
 
         # ------------------------------------------------------------------
-        # 5. START BACKGROUND OVERRIDE LISTENER  ← v2.1
-        #    Reads raw stdin in a daemon thread — no X11 focus needed.
-        #    Press 'o' in ANY terminal window to toggle MANUAL mode.
+        # 5. BACKGROUND OVERRIDE LISTENER  ← v2.1
+        #    NOT started here — started explicitly after all input() prompts
+        #    inside each run_* method so termios raw mode never blocks typing.
         # ------------------------------------------------------------------
-        self.remote_override.start_listener()
+        self._listener_started = False
 
         self.running           = False
         self.autonomous_active = False
+
+    # -----------------------------------------------------------------------
+    # Terminal helpers
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _restore_terminal():
+        """
+        Restore cooked (normal) terminal mode before any input() call.
+        Guards against the background termios thread leaving stdin in raw mode,
+        which causes input() to appear frozen / not echo keystrokes.
+        """
+        try:
+            import termios, tty
+            fd = sys.stdin.fileno()
+            # tcgetattr will raise if fd is not a tty (e.g. piped stdin)
+            attrs = termios.tcgetattr(fd)
+            # Set ECHO and ICANON (cooked mode) flags
+            attrs[3] |= termios.ECHO | termios.ICANON
+            termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
+        except Exception:
+            pass  # Non-tty stdin — nothing to restore
+
+    def _start_listener_once(self):
+        """Start the background override listener exactly once per session."""
+        if not self._listener_started:
+            self.remote_override.start_listener()
+            self._listener_started = True
 
     # -----------------------------------------------------------------------
     # Camera helpers
@@ -372,6 +400,7 @@ class AutonomousVehicle:
             if self.logger:
                 self.logger.log_event('hardware_test', 'Servo test completed')
 
+            self._restore_terminal()
             input("Press ENTER to test motors (ensure clear space)...")
             print("\n[2/2] Testing motors...")
             self.motor_control.test_motors()
@@ -549,10 +578,14 @@ class AutonomousVehicle:
             print("  - Vehicle on track with clear lane markings")
             print("  - Clear path ahead")
             print("  - Emergency stop accessible (ESC)")
+            self._restore_terminal()
             response = input("\nContinue? (yes/no): ")
             if response.lower() != 'yes':
                 print("Aborted.")
                 return
+
+        # Start background listener NOW — after all input() prompts are done
+        self._start_listener_once()
 
         print("\nControls:")
         print("  SPACE      — Start / Stop autonomous mode")
@@ -963,6 +996,7 @@ def main():
             print("  'o' — toggle manual override (terminal — no X11 focus needed)")
             print("  'q' — quit safely")
 
+            AutonomousVehicle._restore_terminal()
             confirm = input("\nType 'CONFIRM' to proceed: ").strip()
 
             if confirm == 'CONFIRM':
