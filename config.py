@@ -10,12 +10,14 @@ Centralizes all system parameters aligned with:
     - NFR-S1: Obstacle emergency stop 100% reliable
     - NFR-S2: Manual emergency stop 100% reliable
     - NFR-U1: Override response < 50ms
+
+Supports both hardcoded defaults and optional JSON configuration file
+for easy parameter tuning without code modification.
 """
 
 import json
 import os
 from typing import Dict, Any, Optional
-
 
 # ============================================================================
 # CONFIGURATION CLASS - Supports JSON file loading
@@ -71,8 +73,8 @@ class SystemConfig:
         self.CANNY_HIGH_THRESHOLD = lane.get('canny_high', 150)
         self.HOUGH_RHO             = lane.get('hough_rho', 2)
         self.HOUGH_THETA           = lane.get('hough_theta', 1)
-        self.HOUGH_THRESHOLD       = lane.get('hough_threshold', 25) # Optimized
-        self.HOUGH_MIN_LINE_LENGTH = lane.get('hough_min_line_length', 20) # Optimized
+        self.HOUGH_THRESHOLD       = lane.get('hough_threshold', 25) 
+        self.HOUGH_MIN_LINE_LENGTH = lane.get('hough_min_line_length', 20) 
         self.HOUGH_MAX_LINE_GAP    = lane.get('hough_max_line_gap', 50)
         self.MIN_LANE_SLOPE        = lane.get('min_lane_slope', 0.3)
         self.MAX_LANE_SLOPE        = lane.get('max_lane_slope', 3.0)
@@ -84,14 +86,14 @@ class SystemConfig:
         self.OBSTACLE_THRESHOLD_VALUE   = obstacle.get('threshold_value', 60)
         self.OBSTACLE_THRESHOLD_PERCENT = obstacle.get('min_blob_area_percent', 0.8)
 
-        # === MOTOR CONTROL (Tuned for Jonathan's use case) ===
+        # === MOTOR CONTROL ===
         control = settings.get('control', {})
-        self.BASE_SPEED = control.get('base_speed', 20) # Lowered for curve stability
+        self.BASE_SPEED = control.get('base_speed', 20) 
         self.MAX_SPEED  = control.get('max_speed', 100)
         self.MIN_SPEED  = control.get('min_speed', 10)
         self.MAX_STEER_ANGLE  = control.get('max_steer_angle', 25)
         self.STEER_SMOOTHING  = control.get('steer_smoothing', 0.5)
-        self.STEER_KP         = control.get('steer_kp', 0.30)   # Increased to fix understeer
+        self.STEER_KP         = control.get('steer_kp', 0.30)   
         self.STEER_TRIM       = control.get('steer_trim', 0)
 
         # === LOGGING & DEBUG ===
@@ -142,14 +144,12 @@ class SystemConfig:
         }
 
     def export_to_json(self, filename: str = "settings_export.json"):
-        """Exports current runtime configuration to a JSON file."""
-        settings = self._get_default_settings() # Re-build from current state for export
+        settings = self._get_default_settings() 
         with open(filename, 'w') as f:
             json.dump(settings, f, indent=2)
         print(f"[CONFIG] Configuration exported to {filename}")
 
     def print_summary(self):
-        """Prints a summary to the console for viva/testing validation."""
         print("\n" + "=" * 60)
         print("SYSTEM CONFIGURATION SUMMARY")
         print("=" * 60)
@@ -157,28 +157,64 @@ class SystemConfig:
         print(f"Speed: {self.BASE_SPEED} | Steer Kp: {self.STEER_KP} | Trim: {self.STEER_TRIM:+d}")
         print("=" * 60 + "\n")
 
-# Global Instance
+
+# ============================================================================
+# GLOBAL INSTANCE
+# ============================================================================
 config = SystemConfig()
 
-# Backward compatibility mapping (Standardizes access for other modules)
+
+# ============================================================================
+# BACKWARD COMPATIBILITY MAPPINGS (THE FIX IS HERE)
+# ============================================================================
 LATENCY_TARGET_MS = config.LATENCY_TARGET_MS
 MIN_FPS           = config.MIN_FPS
+
 CAMERA_WIDTH      = config.CAMERA_WIDTH
 CAMERA_HEIGHT     = config.CAMERA_HEIGHT
+CAMERA_FPS        = config.CAMERA_FPS
+
 ROI_TOP_RATIO     = config.ROI_TOP_RATIO
 ROI_BOTTOM_RATIO  = config.ROI_BOTTOM_RATIO
+BLUR_KERNEL_SIZE  = config.BLUR_KERNEL_SIZE
 CANNY_LOW_THRESHOLD   = config.CANNY_LOW_THRESHOLD
 CANNY_HIGH_THRESHOLD  = config.CANNY_HIGH_THRESHOLD
+HOUGH_RHO             = config.HOUGH_RHO
+HOUGH_THETA           = config.HOUGH_THETA
 HOUGH_THRESHOLD       = config.HOUGH_THRESHOLD
 HOUGH_MIN_LINE_LENGTH = config.HOUGH_MIN_LINE_LENGTH
 HOUGH_MAX_LINE_GAP    = config.HOUGH_MAX_LINE_GAP
-BASE_SPEED            = config.BASE_SPEED
-STEER_KP              = config.STEER_KP
-STEER_SMOOTHING       = config.STEER_SMOOTHING
-STEER_TRIM            = config.STEER_TRIM
-DEBUG_MODE            = config.DEBUG_MODE
-SHOW_ROI              = config.SHOW_ROI
-SHOW_LANE_LINES       = config.SHOW_LANE_LINES
+MIN_LANE_SLOPE        = config.MIN_LANE_SLOPE
+MAX_LANE_SLOPE        = config.MAX_LANE_SLOPE
+
+# --- THESE WERE MISSING PREVIOUSLY ---
+SAFETY_ZONE_WIDTH_RATIO    = config.SAFETY_ZONE_WIDTH_RATIO
+SAFETY_ZONE_HEIGHT_RATIO   = config.SAFETY_ZONE_HEIGHT_RATIO
+OBSTACLE_THRESHOLD_VALUE   = config.OBSTACLE_THRESHOLD_VALUE
+OBSTACLE_THRESHOLD_PERCENT = config.OBSTACLE_THRESHOLD_PERCENT
+
+BASE_SPEED        = config.BASE_SPEED
+MAX_SPEED         = config.MAX_SPEED
+MIN_SPEED         = config.MIN_SPEED
+MAX_STEER_ANGLE   = config.MAX_STEER_ANGLE
+STEER_SMOOTHING   = config.STEER_SMOOTHING
+STEER_KP          = config.STEER_KP
+STEER_TRIM        = config.STEER_TRIM
+
+OBSTACLE_PRIORITY = config.OBSTACLE_PRIORITY
+FUSION_MODE       = config.FUSION_MODE
+OVERRIDE_ENABLED  = config.OVERRIDE_ENABLED
+OVERRIDE_TIMEOUT_MS = config.OVERRIDE_TIMEOUT_MS
+
+LOG_TELEMETRY      = config.LOG_TELEMETRY
+LOG_DIRECTORY      = config.LOG_DIRECTORY
+FRAME_LOG_INTERVAL = config.FRAME_LOG_INTERVAL
+
+DEBUG_MODE        = config.DEBUG_MODE
+SHOW_ROI          = config.SHOW_ROI
+SHOW_LANE_LINES   = config.SHOW_LANE_LINES
+SHOW_SAFETY_ZONE  = config.SHOW_SAFETY_ZONE
+SAVE_DEBUG_FRAMES = config.SAVE_DEBUG_FRAMES
 
 if __name__ == "__main__":
     config.print_summary()
