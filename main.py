@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Autonomous Vehicle Testing & Integration - Enhanced v2.2
+Autonomous Vehicle Testing & Integration - Enhanced v2.3
 Student: Benyamin Mahamed (W1966430)
 Project: Autonomous Self-Driving Car for Assisted Mobility
 
@@ -29,12 +29,11 @@ Performance Targets:
     - NFR-S1: Obstacle E-Stop   100% reliable
     - NFR-S2: Manual E-Stop     100% reliable
 
-v2.2 Changes:
+v2.3 Changes:
     - FIXED: Statistics summary display on quit by wrapping finally blocks.
-    - FIXED: Restore terminal logic to prevent stdin lockout.
-    - RemoteOverride runs a background daemon thread (OverrideListener)
-      that reads raw stdin — completely independent of cv2.waitKey / X11 focus.
-    - manual_override_flag (threading.Event) is checked each frame.
+    - FIXED: Removed text-based confirmations ("Type CONFIRM") to prevent 
+      the background thread from stealing keystrokes and causing false aborts.
+    - RemoteOverride runs a background daemon thread (OverrideListener).
     - MANUAL mode label renders in MAGENTA (255, 0, 255) for Priority 1 evidence.
 """
 
@@ -581,6 +580,7 @@ class AutonomousVehicle:
               f"{'SIMULATION' if self.simulation_mode else 'LIVE MOTORS'}")
         print("="*60)
 
+        # Removed string confirmation trap here
         if not self.simulation_mode:
             print("\n ⚠  WARNING: Motors will move!")
             print("Requirements:")
@@ -588,10 +588,6 @@ class AutonomousVehicle:
             print("  - Clear path ahead")
             print("  - Emergency stop accessible (ESC)")
             self._restore_terminal()
-            response = input("\nContinue? (yes/no): ")
-            if response.lower() != 'yes':
-                print("Aborted.")
-                return
 
         # Start background listener NOW — after all input() prompts are done
         self._start_listener_once()
@@ -937,7 +933,7 @@ class AutonomousVehicle:
 
 def print_menu():
     print("\n" + "="*60)
-    print("AUTONOMOUS VEHICLE — TESTING SUITE v2.2")
+    print("AUTONOMOUS VEHICLE — TESTING SUITE v2.3")
     print("Student: Benyamin Mahamed (W1966430)")
     print("Target:  Jonathan (77) — Assisted Mobility Platform")
     print("="*60)
@@ -953,7 +949,7 @@ def main():
     sys.stdout.flush()
 
     print("\n" + "="*60)
-    print("AUTONOMOUS VEHICLE TESTING SYSTEM v2.2")
+    print("AUTONOMOUS VEHICLE TESTING SYSTEM v2.3")
     print("="*60)
     print("\nStudent: Benyamin Mahamed (W1966430)")
     print("Project: Autonomous Self-Driving Car for Assisted Mobility")
@@ -1017,22 +1013,21 @@ def main():
             print("  'q' — quit safely")
 
             AutonomousVehicle._restore_terminal()
-            confirm = input("\nType 'CONFIRM' to proceed: ").strip()
+            
+            # FIX: Removed the confirmation string input trap here. 
+            # Proceeds directly to initialization.
+            
+            if vehicle_sim is not None:
+                print("\n[INFO] Releasing simulation hardware resources...")
+                vehicle_sim = None
+                time.sleep(0.5)
 
-            if confirm == 'CONFIRM':
-                if vehicle_sim is not None:
-                    print("\n[INFO] Releasing simulation hardware resources...")
-                    vehicle_sim = None
-                    time.sleep(0.5)
-
-                print("[INFO] Initialising hardware interface...")
-                if vehicle_live is None:
-                    vehicle_live = AutonomousVehicle(
-                        simulation_mode=False, enable_logging=True
-                    )
-                vehicle_live.run_integration_test()
-            else:
-                print("\n[ABORTED] Live motor test cancelled")
+            print("[INFO] Initialising hardware interface...")
+            if vehicle_live is None:
+                vehicle_live = AutonomousVehicle(
+                    simulation_mode=False, enable_logging=True
+                )
+            vehicle_live.run_integration_test()
 
         elif choice == '5':
             print("\n" + "="*60)
