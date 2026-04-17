@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Autonomous Vehicle Testing & Integration - Enhanced v2.1
+Autonomous Vehicle Testing & Integration - Enhanced v2.2
 Student: Benyamin Mahamed (W1966430)
 Project: Autonomous Self-Driving Car for Assisted Mobility
 
@@ -18,31 +18,30 @@ System Architecture (Integrated - Pi 5 Only):
     - Data Fusion (Priority-based decision logic)
 
 Safety Hierarchy (Highest to Lowest Priority):
-    1. Manual Override  (FR3.1)   ← thread-safe via manual_override_flag
+    1. Manual Override  (FR3.1)    ← thread-safe via manual_override_flag
     2. Obstacle Detection (FR2.2, NFR-S1)
     3. Autonomous Navigation (FR1.1)
     4. Stopped State
 
 Performance Targets:
     - NFR-P1: Latency < 200ms   (Achieved: ~7.7ms–15.6ms)
-    - NFR-P2: FPS ≥ 8           (Achieved: ~14 FPS X11 / ~25-40 FPS headless)
+    - NFR-P2: FPS >= 8          (Achieved: ~14 FPS X11 / ~25-40 FPS headless)
     - NFR-S1: Obstacle E-Stop   100% reliable
     - NFR-S2: Manual E-Stop     100% reliable
 
-v2.1 Changes:
-    - RemoteOverride now runs a background daemon thread (OverrideListener)
+v2.2 Changes:
+    - FIXED: Statistics summary display on quit by wrapping finally blocks.
+    - FIXED: Restore terminal logic to prevent stdin lockout.
+    - RemoteOverride runs a background daemon thread (OverrideListener)
       that reads raw stdin — completely independent of cv2.waitKey / X11 focus.
-    - manual_override_flag (threading.Event) is checked each frame; the 'o'
-      key in cv2.waitKey is kept as a secondary fallback only.
-    - MANUAL mode label now renders in MAGENTA (255, 0, 255) for clear
-      Priority 1 validation evidence.
-    - _create_full_display() updated with correct colour mapping for all modes.
+    - manual_override_flag (threading.Event) is checked each frame.
+    - MANUAL mode label renders in MAGENTA (255, 0, 255) for Priority 1 evidence.
 """
 
 from control_logic import RobotMuscle
 from lane_detection import LaneDetector
 from object_detection import ObstacleDetector
-from remote_override import RemoteOverride, manual_override_flag   # ← v2.1
+from remote_override import RemoteOverride, manual_override_flag
 import cv2
 import time
 import config
@@ -60,7 +59,7 @@ import json
 # ============================================================================
 
 MODE_COLOURS = {
-    "MANUAL":       (255,   0, 255),   # Magenta  — Priority 1 (FR3.1)
+    "MANUAL":        (255,   0, 255),   # Magenta  — Priority 1 (FR3.1)
     "OBSTACLE STOP":(  0,   0, 255),   # Red      — Priority 2 (NFR-S1)
     "AUTONOMOUS":   (  0, 255,   0),   # Green    — Priority 3 (FR1.1)
     "STOPPED":      (128, 128, 128),   # Grey     — Default idle
@@ -308,7 +307,7 @@ class AutonomousVehicle:
             print("[INIT] ✓ Simulation mode — motors disabled")
 
         # ------------------------------------------------------------------
-        # 5. BACKGROUND OVERRIDE LISTENER  ← v2.1
+        # 5. BACKGROUND OVERRIDE LISTENER 
         #    NOT started here — started explicitly after all input() prompts
         #    inside each run_* method so termios raw mode never blocks typing.
         # ------------------------------------------------------------------
@@ -423,7 +422,7 @@ class AutonomousVehicle:
     def run_vision_test(self):
         """
         Vision-only testing — Lane Detection Algorithm Validation.
-        Validates FR1.1, NFR-P1 (< 200ms), NFR-P2 (≥ 8 FPS).
+        Validates FR1.1, NFR-P1 (< 200ms), NFR-P2 (>= 8 FPS).
         """
         if self.logger:
             self.logger.set_test_mode("vision_test")
@@ -542,13 +541,23 @@ class AutonomousVehicle:
         finally:
             cap.release()
             cv2.destroyAllWindows()
-            if latencies:
-                self._print_vision_summary(latencies, steering_angles, confidences, fps)
-            else:
-                print("\n[INFO] No frames processed — cannot generate summary")
-            self.lane_detector.print_statistics()
-            if self.logger:
-                self.logger.save_summary()
+            
+            # --- FIX: Wrapped statistics in try/except ---
+            print("\n" + "="*60)
+            print("POST-TEST REPORT: VISION TEST")
+            print("="*60)
+            try:
+                if latencies:
+                    self._print_vision_summary(latencies, steering_angles, confidences, fps)
+                else:
+                    print("\n[INFO] No frames processed — cannot generate summary")
+                
+                self.lane_detector.print_statistics()
+                
+                if self.logger:
+                    self.logger.save_summary()
+            except Exception as e:
+                print(f"[SUMMARY ERROR] Could not render final stats: {e}")
 
     def run_integration_test(self):
         """
@@ -772,12 +781,20 @@ class AutonomousVehicle:
             cap.release()
             cv2.destroyAllWindows()
 
-            print("\nSESSION STATISTICS")
-            self.lane_detector.print_statistics()
-            self.obstacle_detector.print_statistics()
-            self.remote_override.print_statistics()
-            if self.logger:
-                self.logger.save_summary()
+            # --- FIX: Wrapped statistics in try/except ---
+            print("\n" + "="*60)
+            print("POST-TEST REPORT: INTEGRATION SESSION")
+            print("="*60)
+            try:
+                self.lane_detector.print_statistics()
+                self.obstacle_detector.print_statistics()
+                self.remote_override.print_statistics()
+                if self.logger:
+                    self.logger.save_summary()
+            except Exception as e:
+                print(f"[SUMMARY ERROR] Could not render final stats: {e}")
+            
+            print("\n[INFO] Returning to Main Menu...")
 
     # -----------------------------------------------------------------------
     # Display helpers
@@ -882,7 +899,7 @@ class AutonomousVehicle:
                   f"{config.LATENCY_TARGET_MS / avg_latency:.1f}× better than target")
 
         fps_pass = fps >= config.MIN_FPS
-        print(f"\n[2] FRAME RATE (NFR-P2: ≥ {config.MIN_FPS} FPS)")
+        print(f"\n[2] FRAME RATE (NFR-P2: >= {config.MIN_FPS} FPS)")
         print(f"    FPS: {fps:.1f}  {'✓ PASS' if fps_pass else '✗ FAIL'}")
         if fps_pass:
             print(f"    Performance: {fps / config.MIN_FPS:.1f}× better than target")
@@ -920,7 +937,7 @@ class AutonomousVehicle:
 
 def print_menu():
     print("\n" + "="*60)
-    print("AUTONOMOUS VEHICLE — TESTING SUITE v2.1")
+    print("AUTONOMOUS VEHICLE — TESTING SUITE v2.2")
     print("Student: Benyamin Mahamed (W1966430)")
     print("Target:  Jonathan (77) — Assisted Mobility Platform")
     print("="*60)
@@ -936,7 +953,7 @@ def main():
     sys.stdout.flush()
 
     print("\n" + "="*60)
-    print("AUTONOMOUS VEHICLE TESTING SYSTEM v2.1")
+    print("AUTONOMOUS VEHICLE TESTING SYSTEM v2.2")
     print("="*60)
     print("\nStudent: Benyamin Mahamed (W1966430)")
     print("Project: Autonomous Self-Driving Car for Assisted Mobility")
@@ -947,6 +964,9 @@ def main():
     vehicle_live = None
 
     while True:
+        # Restore terminal here to ensure input works if previous run crashed
+        AutonomousVehicle._restore_terminal()
+        
         if sys.stdin.isatty():
             try:
                 import termios
