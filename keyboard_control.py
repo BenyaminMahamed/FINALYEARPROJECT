@@ -54,11 +54,11 @@ class KeyboardController:
                 
                 if key == 'w':
                     print("Moving FORWARD...")
-                    self.px.backward(self.speed)  # SWAPPED
+                    self.px.forward(self.speed) 
                     
                 elif key == 's':
                     print("Moving BACKWARD...")
-                    self.px.forward(self.speed)  # SWAPPED
+                    self.px.backward(self.speed)  
                     
                 elif key == 'a':
                     print("Turning LEFT...")
