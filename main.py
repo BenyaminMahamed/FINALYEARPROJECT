@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Autonomous Vehicle Testing & Integration - Enhanced v2.4
+Autonomous Vehicle Testing & Integration - v2.5
 Student: Benyamin Mahamed (W1966430)
 Project: Autonomous Self-Driving Car for Assisted Mobility
 
@@ -18,30 +18,34 @@ System Architecture (Integrated - Pi 5 Only):
     - Data Fusion (Priority-based decision logic)
 
 Safety Hierarchy (Highest to Lowest Priority):
-    1. Manual Override  (FR3.1)    ← thread-safe via manual_override_flag
+    1. Manual Override  (FR3.1)    <- thread-safe via manual_override_flag
     2. Obstacle Detection (FR2.2, NFR-S1)
     3. Autonomous Navigation (FR1.1)
     4. Stopped State
 
 Performance Targets:
-    - NFR-P1: Latency < 200ms   (Achieved: ~7.7ms–15.6ms)
-    - NFR-P2: FPS >= 8          (Achieved: ~14 FPS X11 / ~25-40 FPS headless)
+    - NFR-P1: Latency < 200ms   (Achieved: ~7.7ms-15.6ms)
+    - NFR-P2: FPS >= 8          (Achieved: ~25-40 FPS headless / ~8-12 FPS X11)
     - NFR-S1: Obstacle E-Stop   100% reliable
     - NFR-S2: Manual E-Stop     100% reliable
 
-v2.4 Changes:
-    - ADDED: Dual-mode output — headless video recording + optional X11 display.
-    - ADDED: X11 display throttled to DISPLAY_FPS (default 10) to decouple
-      rendering from the control loop. Control loop runs at full camera FPS.
-    - ADDED: VideoWriter records every frame to test_logs/ automatically.
-      Works with no monitor attached — safe for viva/demo environments.
-    - ADDED: DISPLAY_SCALE config for shrinking X11 window over slow SSH links.
-    - FIXED: Steering positive-feedback bug — raw_steering passed through
-      directly; gain/direction controlled by STEER_KP + STEER_SMOOTHING.
-    - FIXED: Statistics summary display on quit by wrapping finally blocks.
-    - FIXED: Removed text-based confirmations ("Type CONFIRM") to prevent
-      the background thread from stealing keystrokes and causing false aborts.
-    - RemoteOverride runs a background daemon thread (OverrideListener).
+v2.5 Changes:
+    - FIXED: cv2.waitKey(1) was called every frame even when headless,
+      blocking the control loop and causing 4-5 FPS on browser SSH.
+      Now skipped entirely when no X11 display is available via _poll_keys().
+    - FIXED: DISPLAY_FPS lowered to 5, DISPLAY_SCALE to 0.5 — better defaults
+      for browser-based SSH clients (e.g. Chromium terminal on Pi).
+    - FIXED: VideoWriter tries MJPG before XVID for Pi 5 compatibility.
+    - ADDED: Real-time control loop FPS printed every 60 frames in terminal
+      so you can confirm the loop is running free of display overhead.
+    - ADDED: Camera frame rate locked to 30 FPS via FrameDurationLimits to
+      prevent Picamera2 over-capturing and filling the pipeline buffer.
+    - ADDED: KeyboardInterrupt handling in run_integration_test finally block.
+    - ADDED: Mode change events logged to JSONL for viva evidence.
+    - All v2.4 features retained: dual-mode output, throttled X11, video
+      recording, decoupled control loop, graceful X11 drop fallback.
+    - Steering fix from v2.3 retained: raw_steering passed through directly,
+      gain/direction owned by STEER_KP + STEER_SMOOTHING in config.py.
     - MANUAL mode label renders in MAGENTA (255, 0, 255) for Priority 1 evidence.
 """
 
@@ -62,15 +66,20 @@ import json
 
 
 # ============================================================================
-# DISPLAY CONFIGURATION
+# DISPLAY CONFIGURATION — tune these without touching any other code
 # ============================================================================
 
-# Maximum FPS to push to X11/VNC — decoupled from control loop FPS.
-# Lowering this reduces network/render overhead when using X11 forwarding.
-# Control loop always runs at full camera capture rate regardless.
-DISPLAY_FPS    = 10          # Target X11 display refresh rate (frames/sec)
-DISPLAY_SCALE  = 1.0         # Scale factor for X11 window (0.5 = half size, faster over SSH)
-RECORD_VIDEO   = True        # Always record to file — works headless with no monitor
+# X11 refresh rate — kept low so rendering never stalls the control loop.
+# The control loop and video recording ALWAYS run at full camera speed.
+# At 5 FPS the window updates every 200ms which is fine for monitoring.
+DISPLAY_FPS   = 5     # Hz — X11 window refresh rate
+
+# Scale the X11 window. 0.5 = 320x240 over network instead of 640x480.
+# Recommended for browser-based SSH — halves bandwidth, doubles perceived speed.
+DISPLAY_SCALE = 0.5
+
+# Always write annotated frames to test_logs/*.avi — works with no monitor.
+RECORD_VIDEO  = True
 
 
 # ============================================================================
@@ -86,7 +95,7 @@ MODE_COLOURS = {
 
 
 # ============================================================================
-# PERFORMANCE LOGGER - Data Collection & Validation
+# PERFORMANCE LOGGER
 # ============================================================================
 
 class PerformanceLogger:
@@ -100,15 +109,13 @@ class PerformanceLogger:
         - Frame-by-frame metrics (CSV)
         - Session summaries (JSON)
         - Event logs (JSONL)
-        - Performance statistics
     """
 
     def __init__(self, log_dir: str = "test_logs"):
         self.log_dir = log_dir
         os.makedirs(log_dir, exist_ok=True)
 
-        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-
+        self.session_id   = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.metrics_file = os.path.join(log_dir, f"metrics_{self.session_id}.csv")
         self._init_metrics_log()
 
@@ -152,7 +159,6 @@ class PerformanceLogger:
                 metrics.get('mode', 'UNKNOWN'),
                 metrics.get('speed', 0)
             ])
-
         self.session_data['frames_processed'] += 1
         self.session_data['total_latency_ms'] += metrics.get('latency_ms', 0)
 
@@ -163,7 +169,6 @@ class PerformanceLogger:
             'type':          event_type,
             'details':       details
         }
-
         if event_type == 'emergency_stop':
             self.session_data['emergency_stops'] += 1
         elif event_type == 'mode_change':
@@ -186,7 +191,6 @@ class PerformanceLogger:
         self.session_data['duration_seconds']  = (
             self.session_data['end_time'] - self.session_data['start_time']
         )
-
         if self.session_data['frames_processed'] > 0:
             self.session_data['avg_latency_ms'] = (
                 self.session_data['total_latency_ms'] /
@@ -210,21 +214,24 @@ class PerformanceLogger:
 def make_video_writer(log_dir: str, tag: str,
                       width: int, height: int) -> Optional[cv2.VideoWriter]:
     """
-    Create a VideoWriter saving to test_logs/<tag>_<timestamp>.avi.
-    Returns None if VideoWriter cannot be initialised (non-fatal).
-    Records at 15 FPS — good balance of file size vs smoothness for review.
+    Create a VideoWriter saving to test_logs/<tag>_<timestamp>.avi
+    Tries MJPG first (better Pi 5 compatibility), falls back to XVID.
+    Returns None if both fail — non-fatal, run continues without recording.
     """
     os.makedirs(log_dir, exist_ok=True)
     timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
     video_path = os.path.join(log_dir, f"{tag}_{timestamp}.avi")
-    fourcc     = cv2.VideoWriter_fourcc(*'XVID')
-    writer     = cv2.VideoWriter(video_path, fourcc, 15, (width, height))
-    if writer.isOpened():
-        print(f"[RECORD] Recording to {video_path}")
-        return writer
-    else:
-        print(f"[RECORD] WARNING — VideoWriter failed to open {video_path}")
-        return None
+
+    for codec in ('MJPG', 'XVID'):
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        writer = cv2.VideoWriter(video_path, fourcc, 15, (width, height))
+        if writer.isOpened():
+            print(f"[RECORD] Recording ({codec}) -> {video_path}")
+            return writer
+        writer.release()
+
+    print(f"[RECORD] WARNING — VideoWriter could not open {video_path}")
+    return None
 
 
 # ============================================================================
@@ -235,6 +242,9 @@ class Camera:
     """
     Camera wrapper using Picamera2 for Raspberry Pi 5.
     Provides robust initialisation and error handling (FR4.2).
+
+    v2.5: FrameDurationLimits locks capture to 30 FPS so Picamera2 does not
+    over-capture and fill the pipeline buffer faster than it can drain.
     """
 
     def __init__(self, width: int = 640, height: int = 480):
@@ -252,8 +262,17 @@ class Camera:
             )
             self.camera.configure(camera_config)
             self.camera.start()
-            time.sleep(2)
 
+            # Lock to 30 FPS — 33333 microseconds per frame
+            try:
+                self.camera.set_controls(
+                    {"FrameDurationLimits": (33333, 33333)}
+                )
+                print("[CAMERA] Frame rate locked to 30 FPS")
+            except Exception:
+                pass  # Non-fatal — older picamera2 may not support this
+
+            time.sleep(2)
             print("[CAMERA] SUCCESS — Picamera2 ready")
 
         except Exception as e:
@@ -295,11 +314,14 @@ class AutonomousVehicle:
     Main system integrating vision, obstacle detection, and control.
     Shared hardware architecture to prevent GPIO pin conflicts.
 
-    v2.4:
-        - Control loop fully decoupled from X11 display refresh rate.
-        - VideoWriter records every frame regardless of display availability.
-        - X11 window throttled to DISPLAY_FPS to reduce SSH/network overhead.
-        - DISPLAY_SCALE shrinks the window for faster rendering over slow links.
+    v2.5 key changes:
+        - cv2.waitKey() SKIPPED entirely when no X11 — primary fix for
+          4-5 FPS on browser SSH. Control loop now runs at full camera speed.
+        - X11 throttled to DISPLAY_FPS=5 Hz, scaled to DISPLAY_SCALE=0.5.
+        - Real-time loop FPS printed in terminal every 60 frames.
+        - VideoWriter tries MJPG before XVID for Pi 5 compatibility.
+        - Camera locked to 30 FPS via FrameDurationLimits.
+        - Mode change events logged to JSONL for viva evidence.
     """
 
     def __init__(self, simulation_mode: bool = False, enable_logging: bool = True):
@@ -352,11 +374,9 @@ class AutonomousVehicle:
 
         # ------------------------------------------------------------------
         # 5. BACKGROUND OVERRIDE LISTENER
-        #    NOT started here — started explicitly after all input() prompts
-        #    inside each run_* method so termios raw mode never blocks typing.
+        #    Started explicitly after all input() prompts in each run_* method.
         # ------------------------------------------------------------------
         self._listener_started = False
-
         self.running           = False
         self.autonomous_active = False
 
@@ -366,10 +386,7 @@ class AutonomousVehicle:
 
     @staticmethod
     def _restore_terminal():
-        """
-        Restore cooked (normal) terminal mode before any input() call.
-        Guards against the background termios thread leaving stdin in raw mode.
-        """
+        """Restore cooked terminal mode — guards against raw-mode stdin."""
         try:
             import termios
             fd = sys.stdin.fileno()
@@ -386,22 +403,37 @@ class AutonomousVehicle:
             self._listener_started = True
 
     # -----------------------------------------------------------------------
-    # Display helpers
+    # Display / key helpers
     # -----------------------------------------------------------------------
 
     @staticmethod
     def _x11_available() -> bool:
-        """Check whether an X11 display is reachable."""
         return bool(os.environ.get('DISPLAY'))
 
     @staticmethod
     def _scale_frame(frame: np.ndarray, scale: float) -> np.ndarray:
-        """Resize frame for X11 display — reduces bandwidth over SSH."""
+        """Downscale for X11 — reduces SSH bandwidth."""
         if scale == 1.0:
             return frame
         h, w = frame.shape[:2]
         return cv2.resize(frame, (int(w * scale), int(h * scale)),
                           interpolation=cv2.INTER_LINEAR)
+
+    @staticmethod
+    def _poll_keys(has_display: bool) -> int:
+        """
+        Poll cv2 for keypresses ONLY when X11 is active.
+
+        v2.5 FIX: cv2.waitKey(1) triggers X11 event processing which blocks
+        on a network round-trip to the display server on every single call.
+        Over browser SSH this adds ~50-200ms per frame, collapsing FPS to 4-5.
+        Skipping it entirely when headless recovers the full control loop rate.
+
+        Returns keycode on X11, or 0xFF (no-op) when headless.
+        """
+        if has_display:
+            return cv2.waitKey(1) & 0xFF
+        return 0xFF
 
     # -----------------------------------------------------------------------
     # Camera helpers
@@ -421,11 +453,9 @@ class AutonomousVehicle:
                         print(f"[CAMERA] ✗ Test frame failed "
                               f"(attempt {attempt + 1}/{max_retries})")
                         cap.release()
-
                 if attempt < max_retries - 1:
                     print("[CAMERA] Retrying in 2 seconds...")
                     time.sleep(2)
-
             except Exception as e:
                 print(f"[CAMERA] Error on attempt {attempt + 1}: {e}")
                 if self.logger:
@@ -489,8 +519,9 @@ class AutonomousVehicle:
         Vision-only testing — Lane Detection Algorithm Validation.
         Validates FR1.1, NFR-P1 (< 200ms), NFR-P2 (>= 8 FPS).
 
-        v2.4: X11 display throttled to DISPLAY_FPS.
-              VideoWriter records full-speed frames to file regardless.
+        v2.5: waitKey skipped when headless — control loop runs free.
+              VideoWriter records full-speed annotated frames to file.
+              FPS reported every 60 frames in terminal.
         """
         if self.logger:
             self.logger.set_test_mode("vision_test")
@@ -500,13 +531,14 @@ class AutonomousVehicle:
         print("="*60)
         print("\nValidates: FR1.1 | NFR-P1 (latency) | NFR-P2 (FPS)")
         print("Controls:  'q' Quit | 's' Save frame | 'p' Pause/Resume")
+        print("           (OpenCV window must have focus for key controls)")
 
         has_display = self._x11_available()
         if has_display:
-            print(f"[DISPLAY] X11 available — throttled to {DISPLAY_FPS} FPS "
-                  f"(scale={DISPLAY_SCALE})")
+            print(f"[DISPLAY] X11 active — throttled to {DISPLAY_FPS} FPS, "
+                  f"scale={DISPLAY_SCALE}x")
         else:
-            print("[DISPLAY] No X11 — headless mode, recording to file only")
+            print("[DISPLAY] Headless — recording to file, Ctrl+C to stop")
 
         cap, success = self._open_camera()
         if not success:
@@ -536,7 +568,7 @@ class AutonomousVehicle:
             cap.release()
             return
 
-        # Video recording setup
+        # Video recording
         video_out = None
         if RECORD_VIDEO:
             video_out = make_video_writer(
@@ -555,7 +587,6 @@ class AutonomousVehicle:
         fps             = 0.0
         display_frame   = None
 
-        # X11 throttle state
         display_interval = 1.0 / DISPLAY_FPS
         last_display_t   = 0.0
 
@@ -565,7 +596,7 @@ class AutonomousVehicle:
                     ret, frame = cap.read()
                     if not ret or frame is None:
                         print("[WARN] Failed to grab frame, retrying...")
-                        time.sleep(0.1)
+                        time.sleep(0.05)
                         continue
 
                     frame_count += 1
@@ -593,17 +624,17 @@ class AutonomousVehicle:
                             'speed':             0
                         })
 
-                    # Build annotated frame
+                    # Annotated frame
                     display_frame = (result['debug_frame']
                                      if result['debug_frame'] is not None
                                      else frame.copy())
                     self._draw_vision_metrics(display_frame, latency_ms, fps, result)
 
-                    # Always write to video file (full speed, no throttle)
+                    # Video — full speed, no throttle
                     if video_out is not None:
                         video_out.write(display_frame)
 
-                    # Throttled X11 display — only render when interval elapsed
+                    # X11 — throttled
                     now = time.time()
                     if has_display and (now - last_display_t) >= display_interval:
                         try:
@@ -611,30 +642,30 @@ class AutonomousVehicle:
                             cv2.imshow('Vision Test — Lane Detection', scaled)
                             last_display_t = now
                         except Exception:
-                            has_display = False  # X11 dropped — continue headless
+                            has_display = False  # X11 dropped, continue headless
 
-                    if frame_count % 30 == 0:
-                        avg_lat = (np.mean(latencies[-30:])
-                                   if len(latencies) >= 30 else np.mean(latencies))
-                        print(f"Frame {frame_count:4d} | FPS: {fps:4.1f} | "
+                    # Terminal progress every 60 frames
+                    if frame_count % 60 == 0:
+                        avg_lat = np.mean(latencies[-60:]) if latencies else 0.0
+                        print(f"[{frame_count:5d}] FPS: {fps:5.1f} | "
                               f"Latency: {avg_lat:5.1f}ms | "
                               f"Steer: {result['steering_angle']:+4d}deg | "
                               f"Conf: {result['confidence']:.2f}")
 
-                # waitKey(1) — needed for cv2 event loop even when headless
-                key = cv2.waitKey(1) & 0xFF
+                # KEY POLL — only when X11 active (v2.5 core fix)
+                key = self._poll_keys(has_display)
                 if key == ord('q'):
                     break
                 elif key == ord('s') and display_frame is not None:
-                    filename = f"lane_test_{frame_count}.jpg"
-                    cv2.imwrite(filename, display_frame)
-                    print(f"[SAVED] {filename}")
+                    fname = f"lane_test_{frame_count}.jpg"
+                    cv2.imwrite(fname, display_frame)
+                    print(f"[SAVED] {fname}")
                 elif key == ord('p'):
                     paused = not paused
                     print(f"[{'PAUSED' if paused else 'RESUMED'}]")
 
         except KeyboardInterrupt:
-            print("\n[INTERRUPT] Test stopped by user")
+            print("\n[INTERRUPT] Vision test stopped by user")
         except Exception as e:
             print(f"\n[ERROR] Vision test exception: {e}")
             if self.logger:
@@ -670,19 +701,19 @@ class AutonomousVehicle:
         """
         Full Integration Test with ALL safety features.
 
-        v2.4 Display behaviour:
+        v2.5 performance behaviour:
+            - waitKey() SKIPPED when headless — was collapsing FPS to 4-5.
+              Control loop now runs at full camera capture rate.
             - VideoWriter records every control-loop frame to test_logs/.
-              Works with no monitor attached — safe for viva environments.
-            - X11 window (if DISPLAY is set) refreshes at DISPLAY_FPS only,
-              so the control loop is never blocked by rendering overhead.
-            - DISPLAY_SCALE shrinks the X11 window for faster SSH forwarding.
+              Works with no monitor — safe for viva environments.
+            - X11 window throttled to DISPLAY_FPS=5 Hz, scale=0.5.
+            - Real-time FPS + mode printed in terminal every 60 frames.
 
-        v2.3 Override behaviour (unchanged):
-            - 'o' key pressed in the TERMINAL toggles override via background
-              thread (no X11 focus needed) — primary method.
-            - 'o' key in cv2.waitKey is kept as a secondary fallback.
-            - manual_override_flag is the single source of truth.
-            - MANUAL state renders in MAGENTA for Priority 1 validation.
+        Override behaviour (unchanged from v2.3):
+            - 'o' in TERMINAL = PRIMARY override toggle (background thread).
+            - 'o' in OpenCV window = SECONDARY fallback.
+            - manual_override_flag = single source of truth (FR3.1).
+            - MANUAL renders MAGENTA for Priority 1 validation evidence.
         """
         if self.logger:
             self.logger.set_test_mode(
@@ -696,28 +727,28 @@ class AutonomousVehicle:
         print("="*60)
 
         if not self.simulation_mode:
-            print("\n ⚠  WARNING: Motors will move!")
-            print("Requirements:")
+            print("\n WARNING: Motors will move!")
             print("  - Vehicle on track with clear lane markings")
             print("  - Clear path ahead")
-            print("  - Emergency stop accessible (ESC)")
+            print("  - Emergency stop accessible (ESC / Ctrl+C)")
             self._restore_terminal()
 
-        # Start background listener NOW — after all input() prompts are done
+        # Start background override listener — after all input() calls
         self._start_listener_once()
 
         has_display = self._x11_available()
         if has_display:
-            print(f"\n[DISPLAY] X11 available — throttled to {DISPLAY_FPS} FPS "
-                  f"(scale={DISPLAY_SCALE})")
+            print(f"\n[DISPLAY] X11 active — throttled to {DISPLAY_FPS} FPS, "
+                  f"scale={DISPLAY_SCALE}x")
+            print("[DISPLAY] OpenCV window must have focus for SPACE/WASD/ESC/q")
         else:
-            print("\n[DISPLAY] No X11 — headless mode, recording to file only")
+            print("\n[DISPLAY] Headless — recording to file only")
+            print("[DISPLAY] Ctrl+C in terminal to stop")
 
         print("\nControls:")
         print("  SPACE  — Start / Stop autonomous mode")
-        print("  'o'    — Toggle MANUAL override "
-              "(terminal key — no X11 focus needed)")
-        print("  WASD   — Manual drive (override active, OpenCV window)")
+        print("  'o'    — Toggle MANUAL override (terminal, no X11 focus needed)")
+        print("  WASD   — Manual drive (override active, OpenCV window focus)")
         print("  ESC    — Emergency stop")
         print("  'q'    — Quit")
 
@@ -733,7 +764,7 @@ class AutonomousVehicle:
         time.sleep(0.5)
         print("[CAMERA] Ready!\n")
 
-        # Video recording setup
+        # Video recording
         video_out = None
         if RECORD_VIDEO:
             video_out = make_video_writer(
@@ -746,8 +777,8 @@ class AutonomousVehicle:
         frame_count            = 0
         fps_start              = time.time()
         fps                    = 0.0
+        last_mode              = None
 
-        # X11 throttle state
         display_interval = 1.0 / DISPLAY_FPS
         last_display_t   = 0.0
 
@@ -756,7 +787,7 @@ class AutonomousVehicle:
                 ret, frame = cap.read()
                 if not ret or frame is None:
                     print("[WARN] Frame grab failed, retrying...")
-                    time.sleep(0.1)
+                    time.sleep(0.05)
                     continue
 
                 frame_count += 1
@@ -768,7 +799,6 @@ class AutonomousVehicle:
                 latency_ms      = (time.time() - start_time) * 1000
 
                 # ── DECISION LOGIC — Priority-based data fusion ──────────────
-                # manual_override_flag is the single source of truth for P1.
 
                 if manual_override_flag.is_set():
                     # PRIORITY 1: MANUAL OVERRIDE (FR3.1)
@@ -790,7 +820,7 @@ class AutonomousVehicle:
                     mode = "AUTONOMOUS"
 
                     # Pass steering angle directly — direction and gain
-                    # controlled by STEER_KP + STEER_SMOOTHING in config.py.
+                    # controlled by STEER_KP + STEER_SMOOTHING in config.py
                     raw_steering   = lane_result.get('steering_angle', 0)
                     steering_angle = raw_steering
 
@@ -805,7 +835,8 @@ class AutonomousVehicle:
                         self.motor_control.px.backward(speed)
                         self.motor_control.px.set_dir_servo_angle(steering_angle)
                         if frame_count % 5 == 0:
-                            print(f"AUTO → Steer: {steering_angle:.1f}° | "
+                            print(f"[AUTO] Steer: {steering_angle:.1f}° | "
+                                  f"Speed: {speed} | "
                                   f"Conf: {lane_result['confidence']:.2f}")
                 else:
                     # DEFAULT: STOPPED
@@ -813,6 +844,14 @@ class AutonomousVehicle:
                     speed = 0
                     if not self.simulation_mode:
                         self.motor_control.emergency_stop()
+
+                # Log mode changes for viva evidence
+                if mode != last_mode:
+                    if self.logger:
+                        self.logger.log_event(
+                            'mode_change', f"{last_mode} -> {mode}"
+                        )
+                    last_mode = mode
 
                 # ── Performance logging ──────────────────────────────────────
                 elapsed = time.time() - fps_start
@@ -831,16 +870,21 @@ class AutonomousVehicle:
                         'speed':             speed
                     })
 
-                # ── Build annotated display frame ────────────────────────────
+                # Terminal FPS report every 60 frames
+                if frame_count % 60 == 0:
+                    print(f"[{frame_count:5d}] FPS: {fps:5.1f} | "
+                          f"Latency: {latency_ms:5.1f}ms | Mode: {mode}")
+
+                # ── Annotated display frame ──────────────────────────────────
                 display_frame = self._create_full_display(
                     frame, lane_result, obstacle_result, mode, fps, latency_ms
                 )
 
-                # Always write to video file (full control-loop speed)
+                # Video — full control-loop speed, always
                 if video_out is not None:
                     video_out.write(display_frame)
 
-                # Throttled X11 display — does NOT block the control loop
+                # X11 — throttled, non-blocking
                 now = time.time()
                 if has_display and (now - last_display_t) >= display_interval:
                     try:
@@ -850,12 +894,11 @@ class AutonomousVehicle:
                     except Exception:
                         has_display = False  # X11 dropped — continue headless
 
-                # ── Input handling (cv2 event loop) ─────────────────────────
-                # waitKey(1) needed even when headless for cv2 bookkeeping.
-                # WASD requires OpenCV window focus — intentional by design.
-                key = cv2.waitKey(1) & 0xFF
+                # ── KEY POLL — only when X11 active (v2.5 core fix) ─────────
+                key = self._poll_keys(has_display)
 
                 if key == ord('q'):
+                    print("\n[QUIT] Stopping integration test...")
                     break
 
                 elif key == ord(' '):
@@ -867,14 +910,13 @@ class AutonomousVehicle:
                         print("[WARN] Deactivate manual override first ('o')")
 
                 elif key == ord('o'):
-                    # Secondary fallback: toggle override from OpenCV window
                     if manual_override_flag.is_set():
                         self.remote_override.deactivate_override()
-                        print("[OVERRIDE] Deactivated via OpenCV window key")
+                        print("[OVERRIDE] Deactivated via OpenCV key")
                     else:
                         self.remote_override.activate_override()
                         self.autonomous_active = False
-                        print("[OVERRIDE] Activated via OpenCV window key")
+                        print("[OVERRIDE] Activated via OpenCV key")
 
                 elif key == 27:   # ESC — emergency stop
                     self.autonomous_active = False
@@ -893,6 +935,8 @@ class AutonomousVehicle:
                     elif key == ord('d'):
                         self.remote_override.process_manual_command('right')
 
+        except KeyboardInterrupt:
+            print("\n[INTERRUPT] Integration test stopped by user")
         except Exception as e:
             print(f"\n[ERROR] Integration test exception: {e}")
             import traceback
@@ -932,8 +976,8 @@ class AutonomousVehicle:
                              mode: str, fps: float,
                              latency_ms: float) -> np.ndarray:
         """
-        Create combined display with all system information.
-        Mode label colour from MODE_COLOURS — MANUAL always renders MAGENTA.
+        Build annotated display frame written to video and shown on X11.
+        Mode colour from MODE_COLOURS — MANUAL always MAGENTA (FR3.1 evidence).
         """
         if lane_result['debug_frame'] is not None:
             display = lane_result['debug_frame'].copy()
@@ -951,19 +995,17 @@ class AutonomousVehicle:
         cv2.rectangle(overlay, (10, 10), (450, 140), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.7, display, 0.3, 0, display)
 
-        y       = 35
-        metrics = [
+        y = 35
+        for text in [
             f"Mode: {mode}",
             f"FPS: {fps:.1f}  |  Latency: {latency_ms:.1f}ms",
             f"Lane Confidence: {lane_result['confidence']:.2f}",
             f"Obstacle: {'YES' if obstacle_result['obstacle_detected'] else 'NO'}"
-        ]
-        for text in metrics:
+        ]:
             cv2.putText(display, text, (20, y),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             y += 25
 
-        # Large mode label — colour from MODE_COLOURS
         mode_colour = MODE_COLOURS.get(mode, (255, 255, 255))
         cv2.putText(display, mode, (10, height - 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, mode_colour, 3)
@@ -972,7 +1014,7 @@ class AutonomousVehicle:
 
     def _draw_vision_metrics(self, frame: np.ndarray, latency_ms: float,
                              fps: float, result: Dict):
-        """Draw metrics overlay for vision-only testing."""
+        """Draw metrics overlay on vision test frames."""
         overlay = frame.copy()
         cv2.rectangle(overlay, (10, 10), (400, 160), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
@@ -998,7 +1040,7 @@ class AutonomousVehicle:
 
     def _print_vision_summary(self, latencies: list, steering_angles: list,
                               confidences: list, fps: float):
-        """Print comprehensive vision test summary."""
+        """Print comprehensive vision test summary against NFR targets."""
         print("\n" + "="*60)
         print("LANE DETECTION TEST SUMMARY")
         print("="*60)
@@ -1014,26 +1056,26 @@ class AutonomousVehicle:
 
         print(f"\n[1] LATENCY (NFR-P1: < {config.LATENCY_TARGET_MS}ms)")
         print(f"    Average: {avg_latency:6.2f}ms  "
-              f"{'✓ PASS' if latency_pass else '✗ FAIL'}")
+              f"{'PASS' if latency_pass else 'FAIL'}")
         print(f"    Min:     {min_latency:6.2f}ms")
         print(f"    Max:     {max_latency:6.2f}ms")
         print(f"    Std Dev: {np.std(latencies):6.2f}ms")
         if latency_pass:
             print(f"    Performance: "
-                  f"{config.LATENCY_TARGET_MS / avg_latency:.1f}× better than target")
+                  f"{config.LATENCY_TARGET_MS / avg_latency:.1f}x better than target")
 
         fps_pass = fps >= config.MIN_FPS
         print(f"\n[2] FRAME RATE (NFR-P2: >= {config.MIN_FPS} FPS)")
-        print(f"    FPS: {fps:.1f}  {'✓ PASS' if fps_pass else '✗ FAIL'}")
+        print(f"    FPS: {fps:.1f}  {'PASS' if fps_pass else 'FAIL'}")
         if fps_pass:
-            print(f"    Performance: {fps / config.MIN_FPS:.1f}× better than target")
+            print(f"    Performance: {fps / config.MIN_FPS:.1f}x better than target")
 
         avg_steering        = np.mean(np.abs(steering_angles))
         steering_smoothness = np.sum(np.abs(np.diff(steering_angles)))
         print(f"\n[3] STEERING BEHAVIOUR")
-        print(f"    Avg magnitude:  {avg_steering:.1f}°")
-        print(f"    Total changes:  {steering_smoothness:.1f}° (lower = smoother)")
-        print(f"    Max:            {np.max(np.abs(steering_angles)):.1f}°")
+        print(f"    Avg magnitude:  {avg_steering:.1f} deg")
+        print(f"    Total changes:  {steering_smoothness:.1f} deg (lower = smoother)")
+        print(f"    Max:            {np.max(np.abs(steering_angles)):.1f} deg")
 
         avg_confidence  = np.mean(confidences)
         low_conf_frames = int(np.sum(np.array(confidences) < 0.5))
@@ -1046,11 +1088,11 @@ class AutonomousVehicle:
         passed = sum([latency_pass, fps_pass, avg_confidence > 0.5])
         print(f"\n[5] OVERALL: {passed}/3 tests passed")
         if passed == 3:
-            print("    Status: ✓ READY FOR INTEGRATION")
+            print("    Status: READY FOR INTEGRATION")
         elif passed >= 2:
-            print("    Status: ⚠  NEEDS TUNING")
+            print("    Status: NEEDS TUNING")
         else:
-            print("    Status: ✗ REQUIRES OPTIMISATION")
+            print("    Status: REQUIRES OPTIMISATION")
 
         print("="*60 + "\n")
 
@@ -1061,7 +1103,7 @@ class AutonomousVehicle:
 
 def print_menu():
     print("\n" + "="*60)
-    print("AUTONOMOUS VEHICLE — TESTING SUITE v2.4")
+    print("AUTONOMOUS VEHICLE — TESTING SUITE v2.5")
     print("Student: Benyamin Mahamed (W1966430)")
     print("Target:  Jonathan (77) — Assisted Mobility Platform")
     print("="*60)
@@ -1077,20 +1119,20 @@ def main():
     sys.stdout.flush()
 
     print("\n" + "="*60)
-    print("AUTONOMOUS VEHICLE TESTING SYSTEM v2.4")
+    print("AUTONOMOUS VEHICLE TESTING SYSTEM v2.5")
     print("="*60)
     print("\nStudent: Benyamin Mahamed (W1966430)")
     print("Project: Autonomous Self-Driving Car for Assisted Mobility")
     print("Target:  Jonathan (77) — Wheelchair User")
     print("="*60)
 
-    # Report display mode on startup
     if os.environ.get('DISPLAY'):
-        print(f"\n[DISPLAY] X11 detected — throttled at {DISPLAY_FPS} FPS, "
-              f"scale={DISPLAY_SCALE}")
+        print(f"\n[DISPLAY] X11 detected — display at {DISPLAY_FPS} FPS, "
+              f"scale={DISPLAY_SCALE}x — control loop runs free")
+        print("[DISPLAY] OpenCV window must have focus for key controls")
     else:
-        print("\n[DISPLAY] No X11 — headless mode. "
-              "All output recorded to test_logs/")
+        print("\n[DISPLAY] Headless — all output recorded to test_logs/")
+        print("[DISPLAY] Ctrl+C to stop any test")
     print()
 
     vehicle_sim  = None
@@ -1136,18 +1178,18 @@ def main():
 
         elif choice == '4':
             print("\n" + "="*60)
-            print("⚠  WARNING: LIVE MOTOR MODE")
+            print("WARNING: LIVE MOTOR MODE")
             print("="*60)
             print("\nRequirements:")
             print("  - Vehicle on track with clear lane markings")
             print("  - Clear path ahead")
-            print("  - Emergency stop accessible (ESC)")
+            print("  - Emergency stop accessible (ESC / Ctrl+C)")
             print("  - Adequate lighting")
             print("\nSafety controls:")
-            print("  ESC — immediate emergency stop")
-            print("  'o' — toggle manual override "
-                  "(terminal — no X11 focus needed)")
-            print("  'q' — quit safely")
+            print("  ESC    — immediate emergency stop (OpenCV window focus)")
+            print("  Ctrl+C — emergency stop (terminal, always works)")
+            print("  'o'    — toggle manual override (terminal, no X11 needed)")
+            print("  'q'    — quit safely")
 
             AutonomousVehicle._restore_terminal()
 
