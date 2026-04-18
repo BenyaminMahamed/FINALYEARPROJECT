@@ -63,6 +63,7 @@ class SystemConfig:
         self.CAMERA_WIDTH  = camera.get('width', 640)
         self.CAMERA_HEIGHT = camera.get('height', 480)
         self.CAMERA_FPS    = camera.get('fps', 30)
+        self.CAMERA_BUFFER_SIZE = camera.get('buffer_size', 1)         # FIX: reduces frame lag
 
         # === LANE DETECTION ===
         lane = settings.get('lane_detection', {})
@@ -91,25 +92,28 @@ class SystemConfig:
         self.BASE_SPEED = control.get('base_speed', 10)                # FIX: was 20
         self.MAX_SPEED  = control.get('max_speed', 100)
         self.MIN_SPEED  = control.get('min_speed', 10)
-        self.MAX_STEER_ANGLE  = control.get('max_steer_angle', 25)
-        self.STEER_SMOOTHING  = control.get('steer_smoothing', 0.75)   # FIX: was 0.5
-        self.STEER_KP         = control.get('steer_kp', 0.85)          # FIX: was 0.30
+        self.MAX_STEER_ANGLE  = control.get('max_steer_angle', 20)     # FIX: was 25, caps throw per cycle
+        self.STEER_SMOOTHING  = control.get('steer_smoothing', 0.60)   # FIX: was 0.75, stronger damping
+        self.STEER_KP         = control.get('steer_kp', 0.55)          # FIX: was 0.85, eliminates overshoot
         self.STEER_TRIM       = control.get('steer_trim', 0)
 
-        # === LOGGING & DEBUG ===
+        # === DATA FUSION ===
         fusion = settings.get('data_fusion', {})
         self.OBSTACLE_PRIORITY = fusion.get('obstacle_priority', True)
         self.FUSION_MODE       = fusion.get('mode', 'priority')
 
+        # === REMOTE OVERRIDE ===
         override = settings.get('remote_override', {})
         self.OVERRIDE_ENABLED    = override.get('enabled', True)
         self.OVERRIDE_TIMEOUT_MS = override.get('timeout_ms', 50)
 
+        # === LOGGING ===
         log_cfg = settings.get('logging', {})
         self.LOG_TELEMETRY      = log_cfg.get('enable_telemetry', True)
         self.LOG_DIRECTORY      = log_cfg.get('directory', 'test_logs')
         self.FRAME_LOG_INTERVAL = log_cfg.get('frame_interval', 30)
 
+        # === DEBUG ===
         debug = settings.get('debug', {})
         self.DEBUG_MODE        = debug.get('enable', True)
         self.SHOW_ROI          = debug.get('show_roi', True)
@@ -121,36 +125,65 @@ class SystemConfig:
     def _get_default_settings() -> Dict[str, Any]:
         """Provides the baseline defaults if settings.json is missing."""
         return {
-            "performance": {"latency_target_ms": 200, "min_fps": 8},
-            "camera": {"width": 640, "height": 480, "fps": 30},
+            "performance": {
+                "latency_target_ms": 200,
+                "min_fps": 8
+            },
+            "camera": {
+                "width": 640,
+                "height": 480,
+                "fps": 30,
+                "buffer_size": 1                    # FIX: always read freshest frame
+            },
             "lane_detection": {
-                "roi_top_ratio": 0.35,          # FIX: was 0.60
+                "roi_top_ratio": 0.35,              # FIX: was 0.60
                 "roi_bottom_ratio": 1.0,
                 "blur_kernel_size": 5,
-                "canny_low": 50, "canny_high": 150,
-                "hough_rho": 2, "hough_theta": 1,
+                "canny_low": 50,
+                "canny_high": 150,
+                "hough_rho": 2,
+                "hough_theta": 1,
                 "hough_threshold": 25,
                 "hough_min_line_length": 20,
                 "hough_max_line_gap": 50,
-                "min_lane_slope": 0.5,          # FIX: was 0.3
-                "max_lane_slope": 2.0           # FIX: was 3.0
+                "min_lane_slope": 0.5,              # FIX: was 0.3
+                "max_lane_slope": 2.0               # FIX: was 3.0
             },
             "obstacle_detection": {
-                "safety_zone_width_ratio": 0.4, "safety_zone_height_ratio": 0.5,
-                "threshold_value": 60, "min_blob_area_percent": 0.8
+                "safety_zone_width_ratio": 0.4,
+                "safety_zone_height_ratio": 0.5,
+                "threshold_value": 60,
+                "min_blob_area_percent": 0.8
             },
             "control": {
-                "base_speed": 10,               # FIX: was 20
-                "max_speed": 100, "min_speed": 10,
-                "max_steer_angle": 25,
-                "steer_smoothing": 0.75,        # FIX: was 0.5
-                "steer_kp": 0.85,               # FIX: was 0.30
+                "base_speed": 10,                   # FIX: was 20
+                "max_speed": 100,
+                "min_speed": 10,
+                "max_steer_angle": 20,              # FIX: was 25, caps throw per cycle
+                "steer_smoothing": 0.60,            # FIX: was 0.75, stronger temporal damping
+                "steer_kp": 0.55,                   # FIX: was 0.85, eliminates overshoot/hunting
                 "steer_trim": 0
             },
-            "data_fusion": {"obstacle_priority": True, "mode": "priority"},
-            "remote_override": {"enabled": True, "timeout_ms": 50},
-            "logging": {"enable_telemetry": True, "directory": "test_logs", "frame_interval": 30},
-            "debug": {"enable": True, "show_roi": True, "show_lane_lines": True, "show_safety_zone": True, "save_frames": False}
+            "data_fusion": {
+                "obstacle_priority": True,
+                "mode": "priority"
+            },
+            "remote_override": {
+                "enabled": True,
+                "timeout_ms": 50
+            },
+            "logging": {
+                "enable_telemetry": True,
+                "directory": "test_logs",
+                "frame_interval": 30
+            },
+            "debug": {
+                "enable": True,
+                "show_roi": True,
+                "show_lane_lines": True,
+                "show_safety_zone": True,
+                "save_frames": False
+            }
         }
 
     def export_to_json(self, filename: str = "settings_export.json"):
@@ -163,8 +196,11 @@ class SystemConfig:
         print("\n" + "=" * 60)
         print("SYSTEM CONFIGURATION SUMMARY")
         print("=" * 60)
-        print(f"Latency Target: < {self.LATENCY_TARGET_MS}ms | FPS Min: {self.MIN_FPS}")
-        print(f"Speed: {self.BASE_SPEED} | Steer Kp: {self.STEER_KP} | Trim: {self.STEER_TRIM:+d}")
+        print(f"Latency Target : < {self.LATENCY_TARGET_MS}ms | FPS Min: {self.MIN_FPS}")
+        print(f"Camera         : {self.CAMERA_WIDTH}x{self.CAMERA_HEIGHT} @ {self.CAMERA_FPS}fps | Buffer: {self.CAMERA_BUFFER_SIZE}")
+        print(f"Speed          : {self.BASE_SPEED} base | Steer Kp: {self.STEER_KP} | Trim: {self.STEER_TRIM:+d}")
+        print(f"Steer Smoothing: {self.STEER_SMOOTHING} | Max Angle: {self.MAX_STEER_ANGLE}deg")
+        print(f"Override       : {'ON' if self.OVERRIDE_ENABLED else 'OFF'} | Timeout: {self.OVERRIDE_TIMEOUT_MS}ms")
         print("=" * 60 + "\n")
 
 
@@ -175,7 +211,7 @@ config = SystemConfig()
 
 
 # ============================================================================
-# BACKWARD COMPATIBILITY MAPPINGS (THE FIX IS HERE)
+# BACKWARD COMPATIBILITY MAPPINGS
 # ============================================================================
 LATENCY_TARGET_MS = config.LATENCY_TARGET_MS
 MIN_FPS           = config.MIN_FPS
@@ -183,6 +219,7 @@ MIN_FPS           = config.MIN_FPS
 CAMERA_WIDTH      = config.CAMERA_WIDTH
 CAMERA_HEIGHT     = config.CAMERA_HEIGHT
 CAMERA_FPS        = config.CAMERA_FPS
+CAMERA_BUFFER_SIZE = config.CAMERA_BUFFER_SIZE
 
 ROI_TOP_RATIO     = config.ROI_TOP_RATIO
 ROI_BOTTOM_RATIO  = config.ROI_BOTTOM_RATIO
