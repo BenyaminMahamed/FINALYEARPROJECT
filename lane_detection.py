@@ -19,14 +19,13 @@ Design Choice: Classical CV prioritized over Deep Learning for:
 
 Algorithm: Canny Edge Detection → Hough Transform → Line Classification → Steering Calculation
 
-Key Fixes (v2):
+Key Fixes (v3):
+    - STEER_KP reduced 0.85 → 0.55 to eliminate overshoot and hunting oscillation
+    - STEER_SMOOTHING increased to 0.60 for stronger temporal damping
+    - MAX_STEER_ANGLE reduced 25 → 20 to cap per-tick steering throw
     - STEER_TRIM applied after clamping for physical wheel alignment correction
-    - Steering smoothing now active: blends previous and new angle each frame
-    - Single-lane center estimation uses measured half-lane width (0.30 * width)
-      rather than the previous 0.20 which caused aggressive overcorrection
-    - _calculate_steering sign convention clarified and documented
-    - Debug overlay expanded: shows trim, smoothed angle, lane offset, and
-      lanes_detected label for cleaner on-track validation
+    - Single-lane centre estimation uses 0.30 * width (empirically measured)
+    - Debug overlay shows trim, smoothed angle, lane offset, and lanes_detected
 """
 
 import cv2
@@ -70,7 +69,8 @@ class LaneDetector:
 
         # Steering smoothing — carries the previous output angle between frames.
         # Each frame: smoothed = prev * (1 - alpha) + new * alpha
-        # where alpha = STEER_SMOOTHING (0.5 = equal blend, lower = more inertia)
+        # where alpha = STEER_SMOOTHING (0.60 = slight bias toward new reading,
+        # lower = more inertia/damping, higher = more responsive but prone to oscillation)
         self._smoothed_steering = 0.0
 
         # Performance tracking
@@ -164,13 +164,15 @@ class LaneDetector:
             left_lane, right_lane, frame.shape
         )
 
-        # Step 7: Apply exponential smoothing to damp frame-to-frame jitter
-        alpha = config.STEER_SMOOTHING  # 0.5 — equal blend of old and new
+        # Step 7: Apply exponential smoothing to damp frame-to-frame jitter.
+        # alpha = STEER_SMOOTHING (0.60): blends 40% previous + 60% new reading.
+        # Reduced from 0.75 to 0.60 to increase damping and eliminate hunting.
+        alpha = config.STEER_SMOOTHING
         self._smoothed_steering = (
             self._smoothed_steering * (1.0 - alpha) + raw_angle * alpha
         )
 
-        # Step 8: Apply static trim offset and final clamp
+        # Step 8: Apply static trim offset and final clamp.
         # STEER_TRIM > 0 nudges right, < 0 nudges left.
         # Tune in ±1 increments after observing consistent one-sided drift.
         steering_angle = int(round(self._smoothed_steering)) + config.STEER_TRIM
@@ -369,6 +371,11 @@ class LaneDetector:
         half-lane width.  This was measured empirically on the test track;
         adjust via settings.json if the track width changes.
 
+        STEER_KP=0.55: a 30px offset produces a 16.5° correction.
+        Previously 0.85 (25.5°) caused overshoot and hunting oscillation.
+        If oscillation recurs, reduce in 0.05 steps. If understeering,
+        increase in 0.05 steps.
+
         Returns:
             (raw_steering_angle, lane_offset_px, confidence, lanes_detected)
         """
@@ -377,7 +384,7 @@ class LaneDetector:
 
         # Estimated half-lane width in pixels.
         # At 640px wide, 0.30 = 192px — typical for a 30cm-wide lane marking
-        # at ~50cm camera height.  Increase if the car still dives too hard.
+        # at ~50cm camera height. Increase if the car still dives too hard.
         half_lane_px = int(width * 0.30)
 
         if left_lane is not None and right_lane is not None:
@@ -410,7 +417,8 @@ class LaneDetector:
         lane_offset = lane_center - frame_center
 
         # Proportional control — negate so rightward offset gives leftward steer.
-        # STEER_KP=0.20: 30px offset → 6° correction (was 15° at 0.50, causing oscillation)
+        # Kp=0.55 (reduced from 0.85): eliminates overshoot while maintaining
+        # responsive lane correction within MAX_STEER_ANGLE=20 deg limit.
         raw_angle = -int(lane_offset * config.STEER_KP)
 
         # Clamp to max steer (smoothing + trim applied in process_frame)
@@ -435,8 +443,8 @@ class LaneDetector:
         """
         Draw lane lines, steering arrow, and telemetry on frame.
 
-        Overlay now shows: steering angle, trim, lane offset, confidence,
-        and lanes_detected label — all the numbers needed to validate
+        Overlay shows: steering angle, trim, lane offset, confidence,
+        and lanes_detected label — all values needed to validate
         Section 7 performance on the test track.
 
         Args:
