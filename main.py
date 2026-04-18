@@ -659,9 +659,9 @@ class AutonomousVehicle:
                     # PRIORITY 3: AUTONOMOUS LANE FOLLOWING (FR1.1)
                     mode = "AUTONOMOUS"
 
-                    # Invert and dampen steering to match physical actuator
+                    # Pass steering angle directly — direction and gain controlled by STEER_KP + STEER_SMOOTHING in config.py
                     raw_steering   = lane_result.get('steering_angle', 0)
-                    steering_angle = (raw_steering * -1) * 0.7
+                    steering_angle = raw_steering
 
                     if lane_result['confidence'] > 0.5:
                         speed = config.BASE_SPEED
