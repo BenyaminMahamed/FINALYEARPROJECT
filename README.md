@@ -25,7 +25,7 @@ The answer: lane following, obstacle detection, automatic emergency stop, and ma
 
 ## Demo
 
-**[Full demonstration video (35 min)](https://www.youtube.com/watch?v=ol9_oAe9Ogk)** — recorded during a live Mode 4 integration session on physical hardware, showing autonomous lane following, obstacle stop, and manual override in sequence.
+**[Full demonstration video (5 min)](https://www.youtube.com/watch?v=ol9_oAe9Ogk)** — recorded during a live Mode 4 integration session on physical hardware, showing autonomous lane following, obstacle stop, and manual override in sequence.
 
 ---
 
@@ -183,7 +183,7 @@ Calibrate the PiCar-X per the SunFounder documentation before first run. Note: `
 
 - **Environmental dependency** — Static Canny thresholds work well under controlled lighting but degrade meaningfully in variable conditions. One test session under slightly varied ambient light recorded 82.5% bilateral detection vs 100% in controlled conditions. A production system would need adaptive thresholding or upstream illumination normalisation.
 - **P-only controller** — The proportional steering controller works but overshoots on tight curves. A PID controller would improve cornering significantly. Tuning PID on a physically moving platform within a 32-week timeline wasn't practical.
-- **1:10 scale** — All control parameters were tuned for the PiCar-X at this scale. A full wheelchair deployment would require recalibration, re-tuning, and formal clinical validation under MHRA medical device guidelines. This is a feasibility study, not a deployable product.
+- **1:10 scale** — All control parameters were tuned for the PiCar-X at this scale. A full wheelchair deployment would require recalibration, re-tuning, and formal clinical validation under MHRA medical device guidelines. This is a feasibility study, not a deployable product. This is of course something that can be applied to futurework!
 
 ---
 
