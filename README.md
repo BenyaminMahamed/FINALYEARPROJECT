@@ -11,11 +11,6 @@ A Classical Computer Vision system for real-time lane following and obstacle det
 ![Raspberry Pi](https://img.shields.io/badge/-RaspberryPi-C51A4A?style=for-the-badge&logo=Raspberry-Pi)
 ![Git](https://img.shields.io/badge/git-%23F05033.svg?style=for-the-badge&logo=git&logoColor=white)
 
----
-## Youtube demo video 
-
-[![Autonomous Navigation Demo](https://img.youtube.com/vi/ol9_oAe9Ogk/maxresdefault.jpg)](https://www.youtube.com/watch?v=ol9_oAe9Ogk)
-
 --- 
 ## The problem it solves
 
@@ -29,7 +24,7 @@ The answer: lane following, obstacle detection, automatic emergency stop, and ma
 
 ## Demo
 
-**[Full demonstration video (5 min)](https://www.youtube.com/watch?v=ol9_oAe9Ogk)** — recorded during a live Mode 4 integration session on physical hardware, showing autonomous lane following, obstacle stop, and manual override in sequence.
+**[Full demonstration video (5 min)][!(https://img.youtube.com/vi/ol9_oAe9Ogk/maxresdefault.jpg)](https://www.youtube.com/watch?v=ol9_oAe9Ogk)** — recorded during a live Mode 4 integration session on physical hardware, showing autonomous lane following, obstacle stop, and manual override in sequence.
 
 ---
 
