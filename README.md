@@ -13,7 +13,8 @@ A Classical Computer Vision system for real-time lane following and obstacle det
 
 ---
 ## Youtube video 
-<iframe width="560" height="315" src="https://www.youtube.com/embed/ol9_oAe9Ogk?si=xJLJ225CR7xIpS0H" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+
+https://www.youtube.com/watch?v=ol9_oAe9Ogk
 
 --- 
 ## The problem it solves
