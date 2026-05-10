@@ -12,9 +12,9 @@ A Classical Computer Vision system for real-time lane following and obstacle det
 ![Git](https://img.shields.io/badge/git-%23F05033.svg?style=for-the-badge&logo=git&logoColor=white)
 
 ---
-## Youtube video 
+## Youtube demo video 
 
-https://www.youtube.com/watch?v=ol9_oAe9Ogk
+[![Watch the video](https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg)](https://youtu.be/VIDEO_ID)
 
 --- 
 ## The problem it solves
