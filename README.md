@@ -21,10 +21,11 @@ Commercial autonomous wheelchair solutions like the WHILL Model C2 cost over £5
 The answer: lane following, obstacle detection, automatic emergency stop, and manual override — all running in real time, all validated on physical hardware.
 
 ---
-
 ## Demo
 
-**[Full demonstration video (5 min)][!(https://img.youtube.com/vi/ol9_oAe9Ogk/maxresdefault.jpg)](https://www.youtube.com/watch?v=ol9_oAe9Ogk)** — recorded during a live Mode 4 integration session on physical hardware, showing autonomous lane following, obstacle stop, and manual override in sequence.
+**[Full demonstration video (5 min)](https://www.youtube.com/watch?v=ol9_oAe9Ogk)** — recorded during a live Mode 4 integration session on physical hardware, showing autonomous lane following, obstacle stop, and manual override in sequence.
+
+[![Autonomous Navigation Demo](https://img.youtube.com/vi/ol9_oAe9Ogk/maxresdefault.jpg)](https://www.youtube.com/watch?v=ol9_oAe9Ogk)
 
 ---
 
