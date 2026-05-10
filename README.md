@@ -14,7 +14,7 @@ A Classical Computer Vision system for real-time lane following and obstacle det
 ---
 ## Youtube demo video 
 
-[![Watch the video](https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg)](https://youtu.be/VIDEO_ID)
+[![Autonomous Navigation Demo](https://img.youtube.com/vi/ol9_oAe9Ogk/maxresdefault.jpg)](https://www.youtube.com/watch?v=ol9_oAe9Ogk)
 
 --- 
 ## The problem it solves
