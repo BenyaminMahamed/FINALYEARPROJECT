@@ -2,3 +2,11 @@ __pycache__/
 *.pyc
 .env
 .vscode/
+events_*.jsonl
+__pycache__/
+metrics/
+integration_tests/
+*.csv
+*.log
+integration_*.avi
+summary_*.json
